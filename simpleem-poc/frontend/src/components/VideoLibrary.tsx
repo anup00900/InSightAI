@@ -1,9 +1,10 @@
 import { type Video, formatTime, getScoreColor } from '../lib/api';
-import { FileVideo, Clock, Loader2, CheckCircle2, AlertCircle, Radio, Download, Link2 } from 'lucide-react';
+import { FileVideo, Clock, Loader2, CheckCircle2, AlertCircle, Radio, Download, Link2, Trash2 } from 'lucide-react';
 
 interface Props {
   videos: Video[];
   onSelect: (id: string) => void;
+  onDelete?: (id: string) => void;
 }
 
 function StatusBadge({ status }: { status: string }) {
@@ -56,7 +57,7 @@ function StatusBadge({ status }: { status: string }) {
   );
 }
 
-export default function VideoLibrary({ videos, onSelect }: Props) {
+export default function VideoLibrary({ videos, onSelect, onDelete }: Props) {
   if (videos.length === 0) {
     return (
       <div className="text-center py-16">
@@ -99,17 +100,33 @@ export default function VideoLibrary({ videos, onSelect }: Props) {
                 <Clock className="w-3 h-3" />
                 {video.duration > 0 ? formatTime(video.duration) : '--:--'}
               </div>
-              {video.status === 'complete' && (
-                <div className="flex items-center gap-2">
-                  <span className="text-xs text-text-muted">Score</span>
-                  <span
-                    className="text-sm font-bold"
-                    style={{ color: getScoreColor(video.overall_score) }}
+              <div className="flex items-center gap-3">
+                {video.status === 'complete' && (
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-text-muted">Score</span>
+                    <span
+                      className="text-sm font-bold"
+                      style={{ color: getScoreColor(video.overall_score) }}
+                    >
+                      {Math.round(video.overall_score)}%
+                    </span>
+                  </div>
+                )}
+                {onDelete && (
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (confirm('Delete this recording?')) {
+                        onDelete(video.id);
+                      }
+                    }}
+                    className="opacity-0 group-hover:opacity-100 transition-opacity p-1.5 rounded-lg hover:bg-danger/10 text-text-muted hover:text-danger"
+                    title="Delete recording"
                   >
-                    {Math.round(video.overall_score)}%
-                  </span>
-                </div>
-              )}
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                )}
+              </div>
             </div>
           </div>
         ))}

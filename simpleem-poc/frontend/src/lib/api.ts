@@ -165,6 +165,11 @@ export async function listVideos(): Promise<Video[]> {
   return res.json();
 }
 
+export async function deleteVideo(id: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/videos/${id}`, { method: 'DELETE' });
+  if (!res.ok) throw new Error('Failed to delete video');
+}
+
 export async function getVideo(id: string): Promise<Video> {
   const res = await fetch(`${API_BASE}/videos/${id}`);
   if (!res.ok) throw new Error('Video not found');

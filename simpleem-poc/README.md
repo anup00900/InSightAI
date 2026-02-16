@@ -131,3 +131,9 @@ Combines visual signals (eye contact, gestures, posture) + audio signals (pitch,
 ## License
 
 Private / Proprietary
+
+
+cd /Users/anup.roy/Downloads/Simpleem\ Work/simpleem-poc && /Library/Developer/CommandLineTools usr/bin/python3 -m uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload
+
+
+cd /Users/anup.roy/Downloads/Simpleem\ Work/simpleem-poc/frontend && npm run dev

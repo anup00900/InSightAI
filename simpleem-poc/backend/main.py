@@ -201,6 +201,40 @@ async def list_videos() -> list[VideoOut]:
         ]
 
 
+@app.delete("/api/videos/{video_id}")
+async def delete_video(video_id: str):
+    """Delete a video and all its associated data."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        # Check video exists
+        cursor = await db.execute("SELECT file_path FROM videos WHERE id = ?", (video_id,))
+        row = await cursor.fetchone()
+        if not row:
+            raise HTTPException(404, "Video not found")
+
+        file_path = row[0]
+
+        # Delete all related data
+        for table in [
+            "emotions", "transcript_segments", "flags", "coaching",
+            "summaries", "signal_snapshots", "voice_signals", "word_signals",
+            "personality_signals", "pre_analysis_cache", "correlations",
+            "meeting_analytics", "face_mappings",
+        ]:
+            await db.execute(f"DELETE FROM {table} WHERE video_id = ?", (video_id,))
+        await db.execute("DELETE FROM participants WHERE video_id = ?", (video_id,))
+        await db.execute("DELETE FROM videos WHERE id = ?", (video_id,))
+        await db.commit()
+
+    # Delete the file from disk
+    if file_path and os.path.isfile(file_path):
+        try:
+            os.remove(file_path)
+        except OSError:
+            pass
+
+    return {"status": "ok", "message": "Video deleted"}
+
+
 @app.get("/api/videos/{video_id}")
 async def get_video(video_id: str) -> VideoOut:
     """Get video details and processing status."""

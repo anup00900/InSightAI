@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { type Video, type AnalysisResults, listVideos, getVideo, getResults, uploadVideo, importVideoUrl } from './lib/api';
+import { type Video, type AnalysisResults, listVideos, getVideo, getResults, uploadVideo, importVideoUrl, deleteVideo } from './lib/api';
 import VideoUpload from './components/VideoUpload';
 import VideoLibrary from './components/VideoLibrary';
 import AnalysisDashboard from './components/AnalysisDashboard';
@@ -116,6 +116,15 @@ function App() {
     }
   };
 
+  const handleDelete = async (videoId: string) => {
+    try {
+      await deleteVideo(videoId);
+      setVideos((prev) => prev.filter((v) => v.id !== videoId));
+    } catch (err) {
+      console.error('Failed to delete video:', err);
+    }
+  };
+
   const handleBack = () => {
     setView('library');
     setSelectedVideoId(null);
@@ -157,7 +166,7 @@ function App() {
         {view === 'library' && (
           <div className="space-y-8">
             <VideoUpload onUpload={handleUpload} onImportUrl={handleImportUrl} uploading={uploading} uploadProgress={uploadProgress} error={uploadError} />
-            <VideoLibrary videos={videos} onSelect={handleSelectVideo} />
+            <VideoLibrary videos={videos} onSelect={handleSelectVideo} onDelete={handleDelete} />
             <CrossMeetingAnalytics />
           </div>
         )}
