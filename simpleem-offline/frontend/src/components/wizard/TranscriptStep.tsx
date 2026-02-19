@@ -22,11 +22,11 @@ interface TranscriptStepProps {
   onContinue: () => void;
 }
 
-type Mode = 'transcribe' | 'upload';
+type Mode = 'choose' | 'transcribe' | 'upload';
 type UploadTab = 'file' | 'paste';
 
 export default function TranscriptStep({ videoId, onContinue }: TranscriptStepProps) {
-  const [mode, setMode] = useState<Mode>('transcribe');
+  const [mode, setMode] = useState<Mode>('choose');
   const [uploadTab, setUploadTab] = useState<UploadTab>('file');
 
   // Transcribe mode state
@@ -168,8 +168,42 @@ export default function TranscriptStep({ videoId, onContinue }: TranscriptStepPr
   return (
     <div className="max-w-4xl mx-auto">
       <GlassCard>
-        {/* Mode toggle - only show if not started transcription yet or in upload mode */}
-        {!started && !done && (
+        {/* Mode choice screen */}
+        {mode === 'choose' && !done && (
+          <div className="space-y-6">
+            <div className="text-center mb-2">
+              <h2 className="text-2xl font-bold gradient-text">Transcript</h2>
+              <p className="text-text-muted text-sm mt-2">
+                Choose how to provide the meeting transcript
+              </p>
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <button
+                onClick={() => setMode('transcribe')}
+                className="group p-6 rounded-2xl bg-white/[0.03] border border-white/10 hover:bg-indigo-500/10 hover:border-indigo-500/30 transition-all text-left"
+              >
+                <FileText className="w-8 h-8 text-indigo-400 mb-3" />
+                <h3 className="text-sm font-semibold text-text-primary mb-1">Transcribe Audio</h3>
+                <p className="text-xs text-text-muted">
+                  Auto-transcribe using Whisper AI with speaker detection
+                </p>
+              </button>
+              <button
+                onClick={() => setMode('upload')}
+                className="group p-6 rounded-2xl bg-white/[0.03] border border-white/10 hover:bg-emerald-500/10 hover:border-emerald-500/30 transition-all text-left"
+              >
+                <Upload className="w-8 h-8 text-emerald-400 mb-3" />
+                <h3 className="text-sm font-semibold text-text-primary mb-1">Upload Transcript</h3>
+                <p className="text-xs text-text-muted">
+                  Already have a transcript? Upload VTT/SRT/TXT or paste text — skips transcription
+                </p>
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Mode toggle - show when actively transcribing/uploading (not in choose screen) */}
+        {mode !== 'choose' && !started && !done && (
           <div className="flex justify-center gap-2 mb-6">
             <button
               onClick={() => setMode('transcribe')}
@@ -196,6 +230,7 @@ export default function TranscriptStep({ videoId, onContinue }: TranscriptStepPr
           </div>
         )}
 
+        {mode !== 'choose' && (
         <div className="text-center mb-6">
           <h2 className="text-2xl font-bold gradient-text">
             {done ? 'Review Transcript' : mode === 'upload' ? 'Upload Transcript' : 'Transcribing Audio'}
@@ -208,6 +243,7 @@ export default function TranscriptStep({ videoId, onContinue }: TranscriptStepPr
               : status?.detail || 'Preparing...'}
           </p>
         </div>
+        )}
 
         {/* TRANSCRIBE MODE */}
         {mode === 'transcribe' && !done && !error && (

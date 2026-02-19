@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { type Video, type AnalysisResults, listVideos, getVideo, getResults, deleteVideo } from './lib/api';
 import VideoLibrary from './components/VideoLibrary';
 import AnalysisDashboard from './components/AnalysisDashboard';
@@ -7,7 +7,7 @@ import WizardShell from './components/wizard/WizardShell';
 import UploadStep from './components/wizard/UploadStep';
 import TranscriptStep from './components/wizard/TranscriptStep';
 import AnalysisStep from './components/wizard/AnalysisStep';
-import { Activity, ArrowLeft, Plus } from 'lucide-react';
+import { Activity, ArrowLeft, Plus, Circle, Square, Download } from 'lucide-react';
 
 type View = 'library' | 'wizard' | 'dashboard';
 
@@ -19,6 +19,73 @@ function App() {
   const [results, setResults] = useState<AnalysisResults | null>(null);
   const [loading, setLoading] = useState(false);
   const [wizardStep, setWizardStep] = useState(1);
+
+  // ── Screen recording state ──────────────────────────────────────
+  const [recording, setRecording] = useState(false);
+  const [recElapsed, setRecElapsed] = useState(0);
+  const [recBlob, setRecBlob] = useState<Blob | null>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const chunksRef = useRef<Blob[]>([]);
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (timerRef.current) clearInterval(timerRef.current);
+      streamRef.current?.getTracks().forEach(t => t.stop());
+    };
+  }, []);
+
+  const startRecording = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+      streamRef.current = stream;
+      chunksRef.current = [];
+      const recorder = new MediaRecorder(stream, { mimeType: 'video/webm' });
+      mediaRecorderRef.current = recorder;
+
+      recorder.ondataavailable = (e) => { if (e.data.size > 0) chunksRef.current.push(e.data); };
+      recorder.onstop = () => {
+        stream.getTracks().forEach(t => t.stop());
+        if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
+        const blob = new Blob(chunksRef.current, { type: 'video/webm' });
+        setRecBlob(blob);
+        setRecording(false);
+      };
+
+      // Handle browser "Stop sharing" button
+      stream.getVideoTracks()[0].onended = () => { if (recorder.state === 'recording') recorder.stop(); };
+
+      recorder.start();
+      setRecording(true);
+      setRecElapsed(0);
+      setRecBlob(null);
+      timerRef.current = setInterval(() => setRecElapsed(s => s + 1), 1000);
+    } catch {
+      // User cancelled screen picker
+    }
+  };
+
+  const stopRecording = () => { mediaRecorderRef.current?.stop(); };
+
+  const saveRecording = () => {
+    if (!recBlob) return;
+    const now = new Date();
+    const ts = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}-${String(now.getHours()).padStart(2,'0')}${String(now.getMinutes()).padStart(2,'0')}`;
+    const url = URL.createObjectURL(recBlob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `screen-recording-${ts}.webm`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    setRecBlob(null);
+  };
+
+  const discardRecording = () => { setRecBlob(null); };
+
+  const fmtTime = (s: number) => `${Math.floor(s/60).toString().padStart(2,'0')}:${(s%60).toString().padStart(2,'0')}`;
 
   // ── Fetch video list ───────────────────────────────────────────
   const fetchVideos = useCallback(async () => {
@@ -100,6 +167,14 @@ function App() {
     try {
       await deleteVideo(videoId);
       setVideos((prev) => prev.filter((v) => v.id !== videoId));
+      // If the deleted video was currently selected, go back to library
+      if (selectedVideoId === videoId) {
+        setView('library');
+        setSelectedVideoId(null);
+        setSelectedVideo(null);
+        setResults(null);
+        setWizardStep(1);
+      }
     } catch (err) {
       console.error('Failed to delete video:', err);
     }
@@ -202,6 +277,44 @@ function App() {
 
           {/* Action buttons */}
           <div className="flex items-center gap-3">
+            {/* Screen Record button — always visible */}
+            {!recording && !recBlob && (
+              <button
+                onClick={startRecording}
+                className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-red-400 border border-red-500/30 rounded-xl hover:bg-red-500/10 transition-all duration-200"
+              >
+                <Circle className="w-3.5 h-3.5 fill-red-500 text-red-500" />
+                Record
+              </button>
+            )}
+            {recording && (
+              <button
+                onClick={stopRecording}
+                className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-red-600 rounded-xl hover:bg-red-500 transition-all duration-200 shadow-lg shadow-red-500/30"
+              >
+                <div className="w-2.5 h-2.5 rounded-full bg-white animate-pulse" />
+                <span className="font-mono">{fmtTime(recElapsed)}</span>
+                <Square className="w-3.5 h-3.5" />
+              </button>
+            )}
+            {recBlob && (
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={saveRecording}
+                  className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-emerald-400 border border-emerald-500/30 rounded-xl hover:bg-emerald-500/10 transition-all duration-200"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  Download Recording
+                </button>
+                <button
+                  onClick={discardRecording}
+                  className="px-3 py-2 text-sm text-slate-500 hover:text-slate-300 transition-colors"
+                >
+                  Discard
+                </button>
+              </div>
+            )}
+
             {view === 'library' && (
               <button
                 onClick={handleNewAnalysis}

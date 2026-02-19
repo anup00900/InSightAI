@@ -1,6 +1,7 @@
 """
 EngagementEngine — computes holistic per-participant engagement scores
-using Simpleem-style 55% visual / 38% audio / 7% verbal weighting.
+using balanced 35% visual / 35% audio / 30% text per-frame weighting,
+with final scores blended 40% speaking + 35% frame-based + 25% text.
 
 Also provides EngagementAlertDetector which monitors for sustained low
 engagement and emits EngagementAlert objects when a participant stays
@@ -47,18 +48,23 @@ class EngagementAlert:
 class EngagementEngine:
     """Computes holistic engagement scores from visual, audio, and text signals.
 
-    Weighting follows the Simpleem model:
-        - Visual  : 55%
-        - Audio   : 38%
-        - Verbal  :  7%
+    Adaptive weighting based on camera status:
+        Camera ON:  25% visual, 45% audio/speaking, 30% text
+        Camera OFF:  0% visual, 60% audio/speaking, 40% text
 
     When one or more signal channels are missing, the remaining weights are
     redistributed proportionally so they still sum to 1.0.
     """
 
-    VISUAL_WEIGHT: float = 0.55
-    AUDIO_WEIGHT: float = 0.38
-    VERBAL_WEIGHT: float = 0.07
+    # Camera-ON weights: balanced per-frame scoring
+    VISUAL_WEIGHT: float = 0.35
+    AUDIO_WEIGHT: float = 0.35
+    VERBAL_WEIGHT: float = 0.30
+
+    # Camera-OFF weights (audio + text only)
+    OFF_VISUAL_WEIGHT: float = 0.0
+    OFF_AUDIO_WEIGHT: float = 0.60
+    OFF_VERBAL_WEIGHT: float = 0.40
 
     def compute(
         self,
@@ -67,6 +73,7 @@ class EngagementEngine:
         visual_signal: Optional[SignalEvent] = None,
         audio_signal: Optional[SignalEvent] = None,
         text_signal: Optional[SignalEvent] = None,
+        camera_on: bool = True,
     ) -> EngagementScore:
         """Compute a weighted engagement score from available signals.
 
@@ -81,12 +88,20 @@ class EngagementEngine:
         audio_signal : SignalEvent | None
             Expected ``data["energy"]`` in 0-100.
         text_signal : SignalEvent | None
-            Expected ``data["sentiment_score"]`` in 0-1 (scaled to 0-100).
+            Expected ``data["engagement"]`` in 0-100 (participation-based).
+        camera_on : bool
+            Whether the participant's camera is on. Switches weight profile.
 
         Returns
         -------
         EngagementScore
         """
+        # Select weight profile based on camera status
+        if camera_on:
+            w_visual, w_audio, w_verbal = self.VISUAL_WEIGHT, self.AUDIO_WEIGHT, self.VERBAL_WEIGHT
+        else:
+            w_visual, w_audio, w_verbal = self.OFF_VISUAL_WEIGHT, self.OFF_AUDIO_WEIGHT, self.OFF_VERBAL_WEIGHT
+
         # Extract per-channel scores (0-100).
         visual_score: float = 0.0
         audio_score: float = 0.0
@@ -95,17 +110,17 @@ class EngagementEngine:
         # Build list of (weight, score) for available channels.
         available: list[tuple[float, float]] = []
 
-        if visual_signal is not None:
+        if visual_signal is not None and w_visual > 0:
             visual_score = float(visual_signal.data["engagement"])
-            available.append((self.VISUAL_WEIGHT, visual_score))
+            available.append((w_visual, visual_score))
 
-        if audio_signal is not None:
+        if audio_signal is not None and w_audio > 0:
             audio_score = float(audio_signal.data["energy"])
-            available.append((self.AUDIO_WEIGHT, audio_score))
+            available.append((w_audio, audio_score))
 
-        if text_signal is not None:
-            verbal_score = float(text_signal.data["sentiment_score"]) * 100.0
-            available.append((self.VERBAL_WEIGHT, verbal_score))
+        if text_signal is not None and w_verbal > 0:
+            verbal_score = float(text_signal.data.get("engagement", text_signal.data.get("sentiment_score", 0.5) * 100))
+            available.append((w_verbal, verbal_score))
 
         # Compute holistic score.
         if len(available) == 0:

@@ -84,6 +84,7 @@ export interface SignalSnapshot {
     };
     gestures: string[];
     reactions: string[];
+    confidence?: number;
   }>;
 }
 
@@ -126,6 +127,37 @@ export interface AudioFeatureData {
   speaking_rate: number;
   energy: number;
   pause_count: number;
+}
+
+export interface SpeakerAudioData {
+  participants: Array<{
+    name: string;
+    features: Array<{
+      timestamp: number;
+      pitch_mean: number;
+      pitch_std: number;
+      volume_energy: number;
+      speaking_rate: number;
+      pause_ratio: number;
+      spectral_centroid: number;
+      engagement_score: number;
+    }>;
+  }>;
+}
+
+export interface MeetingNotes {
+  action_items: Array<{ owner: string; task: string; deadline: string | null }>;
+  decisions: Array<{ decision: string; context: string }>;
+  follow_ups: Array<{ topic: string; owner: string | null; timeline: string | null }>;
+  key_questions: Array<{ question: string; raised_by: string | null }>;
+}
+
+export interface ConfidenceSummary {
+  avg_confidence: number;
+  min_confidence: number;
+  total_snapshots: number;
+  disagreement_count: number;
+  accuracy_grade: string;
 }
 
 export interface AnalysisResults {
@@ -336,6 +368,24 @@ export async function getCorrelations(videoId: string): Promise<CorrelationPatte
 export async function getAudioFeatures(videoId: string): Promise<AudioFeatureData[]> {
   const res = await fetch(`${API_BASE}/videos/${videoId}/signals/audio-features`);
   if (!res.ok) return [];
+  return res.json();
+}
+
+export async function getSpeakerAudio(videoId: string): Promise<SpeakerAudioData | null> {
+  const res = await fetch(`${API_BASE}/videos/${videoId}/signals/speaker-audio`);
+  if (!res.ok) return null;
+  return res.json();
+}
+
+export async function getMeetingNotes(videoId: string): Promise<MeetingNotes | null> {
+  const res = await fetch(`${API_BASE}/videos/${videoId}/meeting-notes`);
+  if (!res.ok) return null;
+  return res.json();
+}
+
+export async function getConfidenceSummary(videoId: string): Promise<ConfidenceSummary | null> {
+  const res = await fetch(`${API_BASE}/videos/${videoId}/signals/confidence`);
+  if (!res.ok) return null;
   return res.json();
 }
 

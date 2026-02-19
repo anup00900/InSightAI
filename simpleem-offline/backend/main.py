@@ -8,7 +8,7 @@ import logging
 import aiosqlite
 from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response, FileResponse
+from fastapi.responses import Response, FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
 
@@ -16,11 +16,11 @@ from .models import init_db, DB_PATH
 from .schemas import (
     VideoOut, ParticipantOut, EmotionPoint, TranscriptSegment,
     Flag, CoachingItem, SummaryOut, AnalysisResults, ImportUrlRequest,
-    MeetingAnalytics, RenameParticipantRequest, VideoStatus,
+    MeetingAnalytics, RenameParticipantRequest, VideoStatus, MeetingNotesOut,
 )
 from .transcription_engine import run_transcription
 from .transcript_parser import parse_transcript
-from .batch_pipeline import run_analysis
+from .batch_pipeline import run_analysis, subscribe_events, unsubscribe_events
 from .video_processor import is_video_file, is_audio_file, get_video_duration
 from .media_ingestion import MediaIngestion, extract_name_from_url, COOKIE_DIR
 from .export import generate_pdf_report, generate_csv_export
@@ -374,6 +374,31 @@ async def get_video_status(video_id: str) -> VideoStatus:
         return VideoStatus(step=step, progress=progress, detail=detail)
 
 
+@app.get("/api/videos/{video_id}/analysis-stream")
+async def analysis_stream(video_id: str):
+    """SSE endpoint for real-time analysis events."""
+    q = subscribe_events(video_id)
+
+    async def event_generator():
+        try:
+            while True:
+                try:
+                    event = await asyncio.wait_for(q.get(), timeout=30)
+                    yield f"data: {json.dumps(event)}\n\n"
+                    if event.get("type") in ("complete", "error"):
+                        break
+                except asyncio.TimeoutError:
+                    yield f"data: {json.dumps({'type': 'heartbeat'})}\n\n"
+        finally:
+            unsubscribe_events(video_id, q)
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 # ---------------------------------------------------------------------------
 # Partial results (progressive display during analysis)
 # ---------------------------------------------------------------------------
@@ -522,7 +547,7 @@ async def get_signal_snapshots(video_id: str):
         cursor = await db.execute(
             """SELECT timestamp, participant_id, emotion, emotion_confidence, engagement,
                       posture, openness, leaning, mirroring, body_language_desc,
-                      gestures, reactions
+                      gestures, reactions, confidence
                FROM signal_snapshots WHERE video_id = ?
                ORDER BY timestamp""",
             (video_id,),
@@ -541,6 +566,11 @@ async def get_signal_snapshots(video_id: str):
     by_ts = defaultdict(list)
 
     for r in rows:
+        conf = 1.0
+        try:
+            conf = r["confidence"] if r["confidence"] is not None else 1.0
+        except (IndexError, KeyError):
+            pass
         by_ts[r["timestamp"]].append({
             "label": pid_to_name.get(r["participant_id"], r["participant_id"]),
             "emotions": {
@@ -557,6 +587,7 @@ async def get_signal_snapshots(video_id: str):
             },
             "gestures": json.loads(r["gestures"]) if r["gestures"] else [],
             "reactions": json.loads(r["reactions"]) if r["reactions"] else [],
+            "confidence": conf,
         })
 
     return [{"timestamp": ts, "participants": parts} for ts, parts in sorted(by_ts.items())]
@@ -737,6 +768,7 @@ async def delete_video(video_id: str):
             "summaries", "signal_snapshots", "voice_signals", "word_signals",
             "personality_signals", "pre_analysis_cache", "correlations",
             "meeting_analytics", "face_mappings",
+            "meeting_notes", "voting_log", "speaker_audio_features",
         ]:
             await db.execute(f"DELETE FROM {table} WHERE video_id = ?", (video_id,))
         await db.execute("DELETE FROM participants WHERE video_id = ?", (video_id,))
@@ -747,6 +779,15 @@ async def delete_video(video_id: str):
     if file_path and os.path.isfile(file_path):
         try:
             os.remove(file_path)
+        except OSError:
+            pass
+
+    # Delete processed directory (extracted frames, audio chunks, etc.)
+    import shutil
+    processed_dir = os.path.join(os.path.dirname(__file__), "..", "processed", video_id)
+    if os.path.isdir(processed_dir):
+        try:
+            shutil.rmtree(processed_dir)
         except OSError:
             pass
 
@@ -798,15 +839,22 @@ async def get_emotions(video_id: str) -> list[EmotionPoint]:
     """Get emotion timeline data for all participants."""
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
+        # Join with participants to return name instead of raw UUID
         cursor = await db.execute(
-            "SELECT * FROM emotions WHERE video_id = ? ORDER BY timestamp", (video_id,)
+            """SELECT e.timestamp, e.emotion, e.confidence, e.engagement,
+                      COALESCE(p.name, e.participant_id) as participant_name
+               FROM emotions e
+               LEFT JOIN participants p ON e.participant_id = p.id
+               WHERE e.video_id = ?
+               ORDER BY e.timestamp""",
+            (video_id,),
         )
         rows = await cursor.fetchall()
         return [
             EmotionPoint(
                 timestamp=r["timestamp"], emotion=r["emotion"],
                 confidence=r["confidence"], engagement=r["engagement"],
-                participant_id=r["participant_id"],
+                participant_id=r["participant_name"],
             )
             for r in rows
         ]
@@ -887,6 +935,95 @@ async def get_summary(video_id: str) -> SummaryOut:
         )
 
 
+@app.get("/api/videos/{video_id}/meeting-notes")
+async def get_meeting_notes(video_id: str):
+    """Get structured meeting notes (action items, decisions, follow-ups)."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT * FROM meeting_notes WHERE video_id = ?", (video_id,)
+        )
+        r = await cursor.fetchone()
+        if not r:
+            return {"action_items": [], "decisions": [], "follow_ups": [], "key_questions": []}
+        return {
+            "action_items": json.loads(r["action_items"]),
+            "decisions": json.loads(r["decisions"]),
+            "follow_ups": json.loads(r["follow_ups"]),
+            "key_questions": json.loads(r["key_questions"]),
+        }
+
+
+@app.get("/api/videos/{video_id}/signals/speaker-audio")
+async def get_speaker_audio_features(video_id: str):
+    """Per-speaker audio features from librosa analysis."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            """SELECT saf.*, p.name as participant_name
+               FROM speaker_audio_features saf
+               JOIN participants p ON saf.participant_id = p.id
+               WHERE saf.video_id = ? ORDER BY p.name, saf.timestamp""",
+            (video_id,),
+        )
+        rows = await cursor.fetchall()
+
+    from collections import defaultdict
+    by_participant = defaultdict(list)
+    for r in rows:
+        by_participant[r["participant_name"]].append({
+            "timestamp": r["timestamp"],
+            "pitch_mean": r["pitch_mean"],
+            "pitch_std": r["pitch_std"],
+            "volume_energy": r["volume_energy"],
+            "speaking_rate": r["speaking_rate"],
+            "pause_ratio": r["pause_ratio"],
+            "spectral_centroid": r["spectral_centroid"],
+            "engagement_score": r["engagement_score"],
+        })
+
+    return {
+        "participants": [
+            {"name": name, "features": feats}
+            for name, feats in by_participant.items()
+        ]
+    }
+
+
+@app.get("/api/videos/{video_id}/signals/confidence")
+async def get_confidence_summary(video_id: str):
+    """Get voting confidence summary for a video."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT AVG(confidence) as avg_conf, MIN(confidence) as min_conf, COUNT(*) as total FROM signal_snapshots WHERE video_id = ?",
+            (video_id,),
+        )
+        row = await cursor.fetchone()
+        avg_conf = row["avg_conf"] if row and row["avg_conf"] else 1.0
+        min_conf = row["min_conf"] if row and row["min_conf"] else 1.0
+        total = row["total"] if row else 0
+
+        disagreement_count = 0
+        try:
+            cursor = await db.execute(
+                "SELECT COUNT(*) as cnt FROM voting_log WHERE video_id = ? AND disagreements != '[]'",
+                (video_id,),
+            )
+            row = await cursor.fetchone()
+            disagreement_count = row["cnt"] if row else 0
+        except Exception:
+            pass
+
+    return {
+        "avg_confidence": round(avg_conf, 2),
+        "min_confidence": round(min_conf, 2),
+        "total_snapshots": total,
+        "disagreement_count": disagreement_count,
+        "accuracy_grade": "A" if avg_conf >= 0.8 else "B" if avg_conf >= 0.6 else "C" if avg_conf >= 0.4 else "D",
+    }
+
+
 @app.get("/api/videos/{video_id}/results")
 async def get_results(video_id: str) -> AnalysisResults:
     """Get full analysis results for a video."""
@@ -899,6 +1036,7 @@ async def get_results(video_id: str) -> AnalysisResults:
         summary = await get_summary(video_id)
     except HTTPException:
         summary = None
+    notes = await get_meeting_notes(video_id)
 
     return AnalysisResults(
         video=video,
@@ -907,6 +1045,7 @@ async def get_results(video_id: str) -> AnalysisResults:
         transcript=transcript,
         flags=flags,
         summary=summary,
+        meeting_notes=MeetingNotesOut(**notes) if notes else None,
     )
 
 

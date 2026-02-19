@@ -66,6 +66,13 @@ class SummaryOut(BaseModel):
     overall_sentiment: str
 
 
+class MeetingNotesOut(BaseModel):
+    action_items: list[dict] = []
+    decisions: list[dict] = []
+    follow_ups: list[dict] = []
+    key_questions: list[dict] = []
+
+
 class SignalSnapshot(BaseModel):
     timestamp: float
     participant_id: str
@@ -118,6 +125,7 @@ class AnalysisResults(BaseModel):
     transcript: list[TranscriptSegment]
     flags: list[Flag]
     summary: Optional[SummaryOut] = None
+    meeting_notes: Optional[MeetingNotesOut] = None
 
 
 class ImportUrlRequest(BaseModel):

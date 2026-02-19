@@ -98,6 +98,17 @@ async def init_db():
             )
         """)
         await db.execute("""
+            CREATE TABLE IF NOT EXISTS meeting_notes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                video_id TEXT NOT NULL UNIQUE,
+                action_items TEXT DEFAULT '[]',
+                decisions TEXT DEFAULT '[]',
+                follow_ups TEXT DEFAULT '[]',
+                key_questions TEXT DEFAULT '[]',
+                FOREIGN KEY (video_id) REFERENCES videos(id)
+            )
+        """)
+        await db.execute("""
             CREATE TABLE IF NOT EXISTS signal_snapshots (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 video_id TEXT NOT NULL,
@@ -205,6 +216,37 @@ async def init_db():
                 FOREIGN KEY (video_id) REFERENCES videos(id)
             )
         """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS voting_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                video_id TEXT NOT NULL,
+                timestamp REAL NOT NULL,
+                signal_type TEXT DEFAULT 'visual',
+                model_a_result TEXT DEFAULT '{}',
+                model_b_result TEXT DEFAULT '{}',
+                model_c_result TEXT DEFAULT '{}',
+                consensus_result TEXT DEFAULT '{}',
+                confidence REAL DEFAULT 1.0,
+                disagreements TEXT DEFAULT '[]',
+                FOREIGN KEY (video_id) REFERENCES videos(id)
+            )
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS speaker_audio_features (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                video_id TEXT NOT NULL,
+                participant_id TEXT NOT NULL,
+                timestamp REAL NOT NULL,
+                pitch_mean REAL DEFAULT 0,
+                pitch_std REAL DEFAULT 0,
+                volume_energy REAL DEFAULT 0,
+                speaking_rate REAL DEFAULT 0,
+                pause_ratio REAL DEFAULT 0,
+                spectral_centroid REAL DEFAULT 0,
+                engagement_score REAL DEFAULT 0,
+                FOREIGN KEY (video_id) REFERENCES videos(id)
+            )
+        """)
         # Indexes for query performance
         await db.execute("CREATE INDEX IF NOT EXISTS idx_emotions_video ON emotions(video_id)")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_emotions_ts ON emotions(video_id, timestamp)")
@@ -217,6 +259,14 @@ async def init_db():
         await db.execute("CREATE INDEX IF NOT EXISTS idx_flags_video ON flags(video_id)")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_pre_cache_video ON pre_analysis_cache(video_id, data_type)")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_analytics_video ON meeting_analytics(video_id)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_meeting_notes_video ON meeting_notes(video_id)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_voting_log_video ON voting_log(video_id)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_speaker_audio_video ON speaker_audio_features(video_id)")
+        # Safe column addition — ignores if already exists
+        try:
+            await db.execute("ALTER TABLE signal_snapshots ADD COLUMN confidence REAL DEFAULT 1.0")
+        except Exception:
+            pass  # Column already exists
         await db.commit()
 
 

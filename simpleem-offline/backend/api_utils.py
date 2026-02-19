@@ -74,3 +74,49 @@ async def safe_api_call(
         logger.error(f"[{label}] All attempts failed, using fallback")
         return fallback
     raise last_error or RuntimeError(f"{label} failed with no error captured")
+
+
+async def cascade_api_call(
+    call_factory,
+    *,
+    models: list[str],
+    timeout: float = API_TIMEOUT,
+    retries: int = MAX_RETRIES,
+    required_keys: list[str] | None = None,
+    fallback: dict | list | None = None,
+    label: str = "cascade_call",
+) -> dict | list:
+    """Try multiple models in sequence until one succeeds.
+
+    Args:
+        call_factory: A callable that takes a model name and returns a coroutine factory.
+                      Usage: call_factory(model) returns a zero-arg callable for safe_api_call.
+        models: Ordered list of model names to try.
+        timeout, retries, required_keys: Passed through to safe_api_call.
+        fallback: Final fallback if ALL models fail.
+        label: Human-readable label for logs.
+    """
+    for i, model in enumerate(models):
+        try:
+            result = await safe_api_call(
+                call_factory(model),
+                timeout=timeout,
+                retries=retries,
+                required_keys=required_keys,
+                fallback=None,  # Don't use fallback yet — try next model
+                label=f"{label}_{model}",
+            )
+            if result is not None:
+                if i > 0:
+                    logger.info(f"[{label}] Succeeded with fallback model {model} (attempt {i + 1})")
+                return result
+        except Exception as e:
+            logger.warning(f"[{label}] Model {model} failed: {e}")
+            if i < len(models) - 1:
+                logger.info(f"[{label}] Trying next model: {models[i + 1]}")
+            continue
+
+    logger.error(f"[{label}] All {len(models)} models failed, using fallback")
+    if fallback is not None:
+        return fallback
+    raise RuntimeError(f"{label}: all models exhausted")
