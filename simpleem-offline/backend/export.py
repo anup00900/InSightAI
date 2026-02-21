@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """PDF and CSV export for meeting analysis reports.
 
 - PDF: fpdf2 (pure-Python, no system dependencies)
