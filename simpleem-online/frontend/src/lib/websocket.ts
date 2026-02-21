@@ -21,8 +21,7 @@ export type MessageType =
   | 'complete'
   | 'audio_features'
   | 'engagement_alert'
-  | 'name_map'
-  | 'speaker_update';
+  | 'name_map';
 
 type MessageHandler = (data: unknown) => void;
 
@@ -68,11 +67,8 @@ export class AnalysisWebSocket {
         const msg = JSON.parse(event.data);
         const type = msg.type as MessageType;
         const data = msg.data;
-        if (type === 'signals') {
-          const pCount = data?.participants?.length || 0;
-          const gCount = data?.participants?.reduce((acc: number, p: { gestures?: string[] }) => acc + (p.gestures?.length || 0), 0) || 0;
-          console.log(`[WS] signals ts=${data?.timestamp?.toFixed(1)} participants=${pCount} gestures=${gCount}`);
-        } else if (type !== 'status') {
+        // Only log non-frequent message types (skip signals/status to avoid memory pressure)
+        if (type !== 'signals' && type !== 'status' && type !== 'audio_features') {
           console.log(`[WS] ${type}`);
         }
         this.emit(type, data);

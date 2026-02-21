@@ -148,7 +148,7 @@ export default function VideoUpload({ onUpload, onImportUrl, uploading, uploadPr
               onKeyDown={(e) => e.key === 'Enter' && handleImportUrl()}
               placeholder="Paste meeting recording URL (SharePoint, Teams, YouTube...)"
               disabled={isProcessing}
-              className="w-full pl-10 pr-4 py-3 bg-bg-card border border-border rounded-xl text-text-primary placeholder-text-muted text-sm focus:outline-none focus:border-accent focus:ring-1 focus:ring-accent transition-colors disabled:opacity-50"
+              className="w-full pl-10 pr-4 py-3 glass-card text-text-primary placeholder-text-muted text-sm focus:outline-none focus:border-accent focus:ring-1 focus:ring-accent transition-colors disabled:opacity-50"
             />
           </div>
           <button
@@ -179,7 +179,7 @@ export default function VideoUpload({ onUpload, onImportUrl, uploading, uploadPr
             onKeyDown={(e) => e.key === 'Enter' && handleJoinMeeting()}
             placeholder="Paste Zoom/Teams/Meet link to join live with AI bot..."
             disabled={joiningMeeting}
-            className="w-full pl-10 pr-4 py-3 bg-bg-card border border-border rounded-xl text-text-primary placeholder-text-muted text-sm focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 transition-colors disabled:opacity-50"
+            className="w-full pl-10 pr-4 py-3 glass-card text-text-primary placeholder-text-muted text-sm focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 transition-colors disabled:opacity-50"
           />
         </div>
         <button

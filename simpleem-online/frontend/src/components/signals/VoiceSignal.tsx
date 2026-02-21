@@ -17,7 +17,7 @@ const paceColor: Record<string, string> = {
 function MiniBar({ value, max, color }: { value: number; max: number; color: string }) {
   const pct = Math.max(0, Math.min(100, (value / max) * 100));
   return (
-    <div className="w-14 h-1.5 bg-bg-secondary rounded-full overflow-hidden">
+    <div className="w-14 h-1.5 glass-depth-1 rounded-full overflow-hidden">
       <div className="h-full rounded-full transition-all duration-500" style={{ width: `${pct}%`, backgroundColor: color }} />
     </div>
   );
@@ -107,7 +107,7 @@ export default function VoiceSignal({ voiceSignals, audioFeatures = [], hasAudio
             <div className="flex items-center justify-between">
               <span className="text-xs text-text-muted">Energy</span>
               <div className="flex items-center gap-2">
-                <div className="w-16 h-1.5 bg-bg-secondary rounded-full overflow-hidden">
+                <div className="w-16 h-1.5 glass-depth-1 rounded-full overflow-hidden">
                   <div
                     className="h-full rounded-full transition-all duration-500"
                     style={{

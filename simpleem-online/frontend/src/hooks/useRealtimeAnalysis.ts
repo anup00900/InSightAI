@@ -153,7 +153,6 @@ type Action =
   | { type: 'AUDIO_FEATURES'; data: AudioFeatureData }
   | { type: 'ENGAGEMENT_ALERT'; data: EngagementAlertData }
   | { type: 'NAME_MAP'; data: Record<string, string> }
-  | { type: 'SPEAKER_UPDATE'; data: { start_time: number; speaker: string } }
   | { type: 'RESET' };
 
 // Exponential moving average helper
@@ -169,87 +168,224 @@ function reducer(state: RealtimeState, action: Action): RealtimeState {
 
       const snap = action.data;
       const isHeartbeat = !!(snap as unknown as Record<string, unknown>).is_heartbeat;
-      const newEmotions: EmotionPoint[] = [];
-      const newParticipants = new Map(state.participants);
-      const participantCount = Math.max(1, snap.participants.length);
 
-      for (const p of snap.participants) {
-        const participantId = state.nameMap[p.label] || p.label;
-        newEmotions.push({
+      // Build emotion points for timeline (needed for both heartbeats and real signals)
+      // Only include participants that exist in our known set (prevents phantom timeline entries)
+      const hasNameMap = Object.keys(state.nameMap).length > 0;
+      const newEmotions: EmotionPoint[] = snap.participants
+        .filter((p: SignalSnapshot['participants'][0]) => {
+          if (!hasNameMap) return true; // No name map yet — accept all
+          const resolved = state.nameMap[p.label] || p.label;
+          return state.participants.has(resolved) || Array.from(state.participants.keys()).some(k =>
+            k.toLowerCase() === resolved.toLowerCase()
+          );
+        })
+        .map((p: SignalSnapshot['participants'][0]) => ({
           timestamp: snap.timestamp,
           emotion: p.emotions.primary,
           confidence: p.emotions.confidence,
           engagement: p.emotions.engagement,
-          participant_id: participantId,
-        });
+          participant_id: state.nameMap[p.label] || p.label,
+        }));
 
-        const existing = newParticipants.get(participantId) || {
-          id: participantId,
-          video_id: '',
-          name: participantId,
-          engagement_score: 0,
-          sentiment_score: 0,
-          speaking_pct: 100 / participantCount, // Even distribution initially
-          clarity_score: 0,
-          rapport_score: 0,
-          energy_score: 0,
-        };
-
-        // Engagement from emotions
-        existing.engagement_score = ema(existing.engagement_score || 0, p.emotions.engagement);
-
-        // Only update detailed scores from real analyses (not heartbeats)
-        if (!isHeartbeat) {
-          // Rapport from body language (openness + mirroring)
-          const bl = p.body_language;
-          const opennessScore = bl.openness === 'open' ? 85 : bl.openness === 'mixed' ? 55 : 25;
-          const mirrorBonus = bl.mirroring ? 15 : 0;
-          const rapportRaw = Math.min(100, opennessScore + mirrorBonus);
-          existing.rapport_score = ema(existing.rapport_score || 0, Math.max(0, Math.min(100, rapportRaw)));
-
-          // Clarity from confidence + posture
-          const postureScore = bl.posture === 'upright' ? 80 : bl.posture === 'leaning' ? 60 : 40;
-          const clarityRaw = (p.emotions.confidence * 60) + (postureScore * 0.4);
-          existing.clarity_score = ema(existing.clarity_score || 0, Math.min(100, clarityRaw));
-
-          // Energy from engagement + leaning
-          const leanScore = bl.leaning === 'forward' ? 85 : bl.leaning === 'neutral' ? 60 : 35;
-          const energyRaw = (p.emotions.engagement * 0.6) + (leanScore * 0.4);
-          existing.energy_score = ema(existing.energy_score || 0, Math.max(0, Math.min(100, energyRaw)));
-        }
-
-        newParticipants.set(participantId, existing);
-      }
-
-      // Only add REAL frame analyses to signals array
-      // (gesture/reaction/body-language panels read from this)
-      let newSignals = state.signals;
-      if (!isHeartbeat) {
-        newSignals = [...state.signals, snap];
-        if (newSignals.length > 500) newSignals.splice(0, newSignals.length - 500);
-
-        // Speaking distribution from real frame appearances only
-        const frameCounts = new Map<string, number>();
-        let totalFrames = 0;
-        for (const s of newSignals) {
-          for (const p of s.participants) {
-            frameCounts.set(p.label, (frameCounts.get(p.label) || 0) + 1);
-            totalFrames++;
-          }
-        }
-        if (totalFrames > 0) {
-          for (const [label, count] of frameCounts) {
-            const pData = newParticipants.get(label);
-            if (pData) {
-              pData.speaking_pct = (count / totalFrames) * 100;
+      // FAST PATH: heartbeats — update emotionTimeline + speaking distribution
+      if (isHeartbeat) {
+        // Apply speaking distribution even from heartbeats (diarization sends it this way)
+        const hbSpeakingDist = (snap as unknown as Record<string, unknown>).speaking_distribution as Record<string, number> | undefined;
+        let newParticipants = state.participants;
+        if (hbSpeakingDist && Object.keys(hbSpeakingDist).length > 0) {
+          newParticipants = new Map(state.participants);
+          for (const [pid, pData] of newParticipants) {
+            let pct = hbSpeakingDist[pid];
+            if (pct === undefined) {
+              // Fuzzy match by first name
+              const pidLower = pid.toLowerCase();
+              for (const [speaker, val] of Object.entries(hbSpeakingDist)) {
+                if (speaker.toLowerCase() === pidLower) { pct = val; break; }
+              }
+            }
+            if (pct !== undefined) {
+              pData.speaking_pct = pct;
             }
           }
         }
+
+        if (newEmotions.length === 0 && newParticipants === state.participants) return state;
+        let newTimeline: EmotionPoint[];
+        if (newEmotions.length === 0) {
+          newTimeline = state.emotionTimeline;
+        } else if (state.emotionTimeline.length >= 100) {
+          newTimeline = [...state.emotionTimeline.slice(-(100 - newEmotions.length)), ...newEmotions];
+        } else {
+          newTimeline = [...state.emotionTimeline, ...newEmotions];
+        }
+        return { ...state, emotionTimeline: newTimeline, participants: newParticipants, isAnalyzing: true, isDetecting: false };
       }
 
-      // Cap emotionTimeline to last 2000 entries to prevent memory leak
-      let newTimeline = [...state.emotionTimeline, ...newEmotions];
-      if (newTimeline.length > 2000) newTimeline = newTimeline.slice(-2000);
+      // FULL PATH: real frame analysis — MERGE into existing participants
+      // Only add NEW participants; update existing ones. Never wipe the Map.
+      const newParticipants = new Map(state.participants);
+
+      for (const p of snap.participants) {
+        let participantId = state.nameMap[p.label] || p.label;
+
+        // Fuzzy match: if participantId not in map, try case-insensitive + prefix match
+        if (!newParticipants.has(participantId)) {
+          const idLower = participantId.toLowerCase();
+          for (const [existingId] of newParticipants) {
+            const exLower = existingId.toLowerCase();
+            if (exLower === idLower) {
+              participantId = existingId; // Use existing key
+              break;
+            }
+            // Word overlap match (exact OR prefix with 4+ chars)
+            const idWords = idLower.split(/\s+/).filter(w => w.length >= 3);
+            const exWords = exLower.split(/\s+/).filter((w: string) => w.length >= 3);
+            let matched = false;
+            for (const iw of idWords) {
+              for (const ew of exWords) {
+                if (iw === ew) { matched = true; break; }
+                // Prefix match: "rangwan" matches "rangwani", "downey" matches "dowdney"
+                if (iw.length >= 4 && ew.length >= 4 && (iw.startsWith(ew) || ew.startsWith(iw))) {
+                  matched = true; break;
+                }
+              }
+              if (matched) break;
+            }
+            if (matched) {
+              participantId = existingId;
+              break;
+            }
+            // Substring match on full name
+            if (idLower.length >= 4 && exLower.length >= 4 && (idLower.includes(exLower) || exLower.includes(idLower))) {
+              participantId = existingId;
+              break;
+            }
+          }
+        }
+
+        if (newParticipants.has(participantId)) {
+          // UPDATE existing
+          const existing = newParticipants.get(participantId)!;
+          existing.engagement_score = ema(existing.engagement_score || 0, p.emotions.engagement);
+
+          const bl = p.body_language;
+          const opennessScore = bl.openness === 'open' ? 85 : bl.openness === 'mixed' ? 55 : 25;
+          const mirrorBonus = bl.mirroring ? 15 : 0;
+          existing.rapport_score = ema(existing.rapport_score || 0, Math.min(100, opennessScore + mirrorBonus));
+
+          const postureScore = bl.posture === 'upright' ? 80 : bl.posture === 'leaning' ? 60 : 40;
+          existing.clarity_score = ema(existing.clarity_score || 0, Math.min(100, (p.emotions.confidence * 60) + (postureScore * 0.4)));
+
+          const leanScore = bl.leaning === 'forward' ? 85 : bl.leaning === 'neutral' ? 60 : 35;
+          existing.energy_score = ema(existing.energy_score || 0, Math.min(100, (p.emotions.engagement * 0.6) + (leanScore * 0.4)));
+
+          // Use backend-provided speaking_pct (backend tracks from visual detection)
+          if ((p as Record<string, unknown>).speaking_pct !== undefined) {
+            existing.speaking_pct = (p as Record<string, unknown>).speaking_pct as number;
+          }
+        } else {
+          // Only add new participants if we haven't received a name_map yet.
+          // Once name_map is received, the participant list is LOCKED —
+          // NAME_MAP handler is the sole authority for who exists.
+          const hasNameMap = Object.keys(state.nameMap).length > 0;
+          if (!hasNameMap) {
+            newParticipants.set(participantId, {
+              id: participantId,
+              video_id: '',
+              name: participantId,
+              engagement_score: p.emotions.engagement,
+              sentiment_score: 0,
+              speaking_pct: 0,
+              clarity_score: 0,
+              rapport_score: 0,
+              energy_score: 0,
+            });
+          }
+          // else: silently ignore — unresolved label, not a known participant
+        }
+      }
+
+      // Apply speaking distribution from backend to ALL participants
+      // Only update when backend provides actual distribution data (not heartbeats)
+      const speakingDist = (snap as unknown as Record<string, unknown>).speaking_distribution as Record<string, number> | undefined;
+      if (speakingDist && Object.keys(speakingDist).length > 0) {
+        for (const [pid, pData] of newParticipants) {
+          // Try exact match first
+          let pct = speakingDist[pid];
+          // Try fuzzy match if no exact match
+          if (pct === undefined) {
+            const pidLower = pid.toLowerCase();
+            for (const [speaker, val] of Object.entries(speakingDist)) {
+              const spLower = speaker.toLowerCase();
+              if (spLower === pidLower) { pct = val; break; }
+              // Word overlap (exact or prefix with 4+ chars)
+              const pidWords = pidLower.split(/\s+/).filter(w => w.length >= 3);
+              const spWords = spLower.split(/\s+/).filter(w => w.length >= 3);
+              let found = false;
+              for (const pw of pidWords) {
+                for (const sw of spWords) {
+                  if (pw === sw || (pw.length >= 4 && sw.length >= 4 && (pw.startsWith(sw) || sw.startsWith(pw)))) {
+                    found = true; break;
+                  }
+                }
+                if (found) break;
+              }
+              if (found) { pct = val; break; }
+            }
+          }
+          // Only update if we have a value; preserve existing % for non-speakers (stays at 0)
+          if (pct !== undefined) {
+            pData.speaking_pct = pct;
+          }
+          // Non-speakers not in speakingDist keep their current value (0 or previous %)
+        }
+      }
+
+      // Build a STABLE snapshot that includes ALL known participants (not just current frame)
+      // This prevents signal panels from flickering as different frames detect different subsets
+      const stableParticipants: SignalSnapshot['participants'] = [];
+      const seenLabels = new Set<string>();
+
+      // First: add current frame's participants (fresh data)
+      for (const p of snap.participants) {
+        const resolvedLabel = state.nameMap[p.label] || p.label;
+        if (!seenLabels.has(resolvedLabel)) {
+          stableParticipants.push({ ...p, label: resolvedLabel });
+          seenLabels.add(resolvedLabel);
+        }
+      }
+
+      // Second: carry forward participants from previous snapshot that aren't in this frame
+      // Resolve through nameMap to prevent stale labels from before name_map was received
+      if (state.signals.length > 0) {
+        const prevSnap = state.signals[state.signals.length - 1];
+        for (const p of prevSnap.participants) {
+          const resolvedPrevLabel = state.nameMap[p.label] || p.label;
+          if (!seenLabels.has(resolvedPrevLabel) && !/^Person \d+$/.test(resolvedPrevLabel) && newParticipants.has(resolvedPrevLabel)) {
+            stableParticipants.push({ ...p, label: resolvedPrevLabel });
+            seenLabels.add(resolvedPrevLabel);
+          }
+        }
+      }
+
+      const stableSnap: SignalSnapshot = { ...snap, participants: stableParticipants };
+
+      // Efficient signal cap
+      let newSignals: SignalSnapshot[];
+      if (state.signals.length >= 60) {
+        newSignals = [...state.signals.slice(-59), stableSnap];
+      } else {
+        newSignals = [...state.signals, stableSnap];
+      }
+
+      // Efficient emotionTimeline cap
+      let newTimeline: EmotionPoint[];
+      if (state.emotionTimeline.length >= 100) {
+        newTimeline = [...state.emotionTimeline.slice(-(100 - newEmotions.length)), ...newEmotions];
+      } else {
+        newTimeline = [...state.emotionTimeline, ...newEmotions];
+      }
 
       return {
         ...state,
@@ -257,7 +393,7 @@ function reducer(state: RealtimeState, action: Action): RealtimeState {
         emotionTimeline: newTimeline,
         participants: newParticipants,
         isAnalyzing: true,
-        isDetecting: false, // First signals received — detection complete
+        isDetecting: false,
       };
     }
 
@@ -269,97 +405,55 @@ function reducer(state: RealtimeState, action: Action): RealtimeState {
         speaker: action.data.speaker,
         participant_id: null,
       };
-      const newTranscript = [...state.transcript, seg];
-
-      // Calculate speaking distribution from all transcript segments
-      const newParticipants = new Map(state.participants);
-      const speakerDurations = new Map<string, number>();
-      let totalDuration = 0;
-      for (const s of newTranscript) {
-        const speaker = s.speaker || 'Unknown';
-        const dur = Math.max(0, s.end_time - s.start_time);
-        speakerDurations.set(speaker, (speakerDurations.get(speaker) || 0) + dur);
-        totalDuration += dur;
-      }
-      if (totalDuration > 0 && newParticipants.size > 0) {
-        // Map speakers to participants by order (Speaker 1 → Person 1, etc.)
-        // or by name match (fallback: distribute evenly)
-        const speakerList = Array.from(speakerDurations.entries()).sort((a, b) => a[0].localeCompare(b[0]));
-        const participantList = Array.from(newParticipants.entries()).sort((a, b) => a[0].localeCompare(b[0]));
-
-        // Try direct name match first, then positional mapping
-        const matched = new Set<string>();
-        for (const [speaker, dur] of speakerList) {
-          let found = false;
-          // Direct match
-          for (const [pid, pData] of participantList) {
-            if (!matched.has(pid) && (pid === speaker || pData.name === speaker)) {
-              pData.speaking_pct = (dur / totalDuration) * 100;
-              matched.add(pid);
-              found = true;
-              break;
-            }
-          }
-          // Number-based match: "Speaker 1" → "Person 1" (extract number)
-          if (!found) {
-            const speakerNum = speaker.match(/(\d+)/)?.[1];
-            if (speakerNum) {
-              for (const [pid, pData] of participantList) {
-                const pidNum = pid.match(/(\d+)/)?.[1];
-                if (!matched.has(pid) && pidNum === speakerNum) {
-                  pData.speaking_pct = (dur / totalDuration) * 100;
-                  matched.add(pid);
-                  found = true;
-                  break;
-                }
-              }
-            }
-          }
-        }
-
-        // Fallback: if no matches worked, distribute evenly among all participants
-        if (matched.size === 0 && speakerList.length > 0) {
-          const evenPct = 100 / Math.max(1, newParticipants.size);
-          for (const [, pData] of newParticipants) {
-            pData.speaking_pct = evenPct;
-          }
-        }
+      // Transcript cap — keep enough for accurate speaking distribution
+      let newTranscript: TranscriptSegment[];
+      if (state.transcript.length >= 500) {
+        newTranscript = [...state.transcript.slice(-499), seg];
+      } else {
+        newTranscript = [...state.transcript, seg];
       }
 
-      return { ...state, transcript: newTranscript, participants: newParticipants, hasAudio: true };
+      // Speaking distribution is now tracked by the BACKEND (via visual is_speaking detection)
+      // and sent with each SIGNALS payload as speaking_pct per participant.
+      // The TRANSCRIPT handler does NOT modify speaking_pct — it only adds transcript segments.
+
+      return { ...state, transcript: newTranscript, hasAudio: true };
     }
 
     case 'VOICE': {
-      let newVoice = [...state.voiceSignals, action.data];
-      if (newVoice.length > 200) newVoice = newVoice.slice(-200);
-      // Update energy scores for all participants from voice energy
-      const newParticipants = new Map(state.participants);
+      const newVoice = state.voiceSignals.length >= 60
+        ? [...state.voiceSignals.slice(-59), action.data]
+        : [...state.voiceSignals, action.data];
+      // Update energy scores — skip Map clone, just update values
       const clampedEnergy = Math.max(0, Math.min(100, action.data.energy));
-      for (const [, pData] of newParticipants) {
+      for (const [, pData] of state.participants) {
         pData.energy_score = ema(pData.energy_score || 0, clampedEnergy);
       }
-      return { ...state, voiceSignals: newVoice, participants: newParticipants };
+      return { ...state, voiceSignals: newVoice };
     }
 
     case 'WORDS': {
-      let newWords = [...state.wordSignals, action.data];
-      if (newWords.length > 200) newWords = newWords.slice(-200);
-      // Update sentiment scores for all participants
-      const newParticipants = new Map(state.participants);
-      // sentiment_score: convert from 0..1 to 0..100 scale, clamp for safety
+      const newWords = state.wordSignals.length >= 60
+        ? [...state.wordSignals.slice(-59), action.data]
+        : [...state.wordSignals, action.data];
+      // Update sentiment scores — skip Map clone, just update values
       const rawScore = action.data.sentiment_score ?? 0.5;
       const sentimentPct = Math.max(0, Math.min(100, rawScore * 100));
-      for (const [, pData] of newParticipants) {
+      for (const [, pData] of state.participants) {
         pData.sentiment_score = ema(pData.sentiment_score || 50, sentimentPct);
       }
-      return { ...state, wordSignals: newWords, participants: newParticipants };
+      return { ...state, wordSignals: newWords };
     }
 
     case 'PERSONALITY':
       return { ...state, personalitySignals: action.data };
 
-    case 'CORRELATION':
-      return { ...state, correlations: [...state.correlations, action.data] };
+    case 'CORRELATION': {
+      const newCorrs = state.correlations.length >= 30
+        ? [...state.correlations.slice(-29), action.data]
+        : [...state.correlations, action.data];
+      return { ...state, correlations: newCorrs };
+    }
 
     case 'FLAG': {
       const flag: Flag = {
@@ -369,7 +463,10 @@ function reducer(state: RealtimeState, action: Action): RealtimeState {
         description: action.data.description || '',
         severity: action.data.severity || 'medium',
       };
-      return { ...state, flags: [...state.flags, flag] };
+      const newFlags = state.flags.length >= 50
+        ? [...state.flags.slice(-49), flag]
+        : [...state.flags, flag];
+      return { ...state, flags: newFlags };
     }
 
     case 'SUMMARY':
@@ -410,39 +507,73 @@ function reducer(state: RealtimeState, action: Action): RealtimeState {
       return { ...state, hasAudio: false };
 
     case 'AUDIO_FEATURES': {
-      let newFeatures = [...state.audioFeatures, action.data];
-      if (newFeatures.length > 200) newFeatures = newFeatures.slice(-200);
+      const newFeatures = state.audioFeatures.length >= 60
+        ? [...state.audioFeatures.slice(-59), action.data]
+        : [...state.audioFeatures, action.data];
       return { ...state, audioFeatures: newFeatures };
     }
 
     case 'ENGAGEMENT_ALERT': {
-      return {
-        ...state,
-        engagementAlerts: [...state.engagementAlerts, action.data],
-      };
+      const newAlerts = state.engagementAlerts.length >= 30
+        ? [...state.engagementAlerts.slice(-29), action.data]
+        : [...state.engagementAlerts, action.data];
+      return { ...state, engagementAlerts: newAlerts };
     }
 
     case 'NAME_MAP': {
       const nameMap = action.data;
-      // Rename existing participants in the Map
-      const renamedParticipants = new Map<string, Partial<Participant>>();
-      for (const [key, pData] of state.participants) {
-        const newName = nameMap[key] || key;
-        renamedParticipants.set(newName, { ...pData, id: newName, name: newName });
-      }
-      return { ...state, nameMap, participants: renamedParticipants };
-    }
+      // AUTHORITATIVE: rebuild participant list from name_map values ONLY.
+      // name_map values are the canonical set — nothing else exists.
+      const authoritative = new Set(
+        Object.values(nameMap).filter((n): n is string => typeof n === 'string' && !/^Person \d+$/.test(n))
+      );
 
-    case 'SPEAKER_UPDATE': {
-      const { start_time, speaker } = action.data;
-      const TOLERANCE = 0.5;
-      const updatedTranscript = state.transcript.map((seg) => {
-        if (Math.abs(seg.start_time - start_time) <= TOLERANCE) {
-          return { ...seg, speaker };
+      // Helper: fuzzy match a name against existing state.participants
+      const findExisting = (name: string): Partial<Participant> | null => {
+        // Exact match
+        const exact = state.participants.get(name);
+        if (exact) return exact;
+        // Case-insensitive + word overlap
+        const nl = name.toLowerCase();
+        for (const [existKey, existData] of state.participants) {
+          const el = existKey.toLowerCase();
+          if (nl === el) return existData;
+          const nWords = nl.split(/\s+/).filter(w => w.length >= 3);
+          const eWords = el.split(/\s+/).filter(w => w.length >= 3);
+          for (const nw of nWords) {
+            for (const ew of eWords) {
+              if (nw === ew) return existData;
+              if (nw.length >= 4 && ew.length >= 4 && (nw.startsWith(ew) || ew.startsWith(nw))) return existData;
+            }
+          }
+          if (nl.length >= 4 && el.length >= 4 && (nl.includes(el) || el.includes(nl))) return existData;
         }
-        return seg;
-      });
-      return { ...state, transcript: updatedTranscript };
+        return null;
+      };
+
+      const newParticipants = new Map<string, Partial<Participant>>();
+      for (const name of authoritative) {
+        const existing = findExisting(name);
+        if (existing) {
+          // Carry over scores from existing entry
+          newParticipants.set(name, { ...existing, id: name, name: name });
+        } else {
+          // Brand new participant (late joiner)
+          newParticipants.set(name, {
+            id: name,
+            video_id: '',
+            name: name,
+            engagement_score: 0,
+            sentiment_score: 0,
+            speaking_pct: 0,
+            clarity_score: 0,
+            rapport_score: 0,
+            energy_score: 0,
+          });
+        }
+      }
+
+      return { ...state, nameMap, participants: newParticipants };
     }
 
     case 'RESET':
@@ -483,7 +614,6 @@ export function useRealtimeAnalysis(videoId: string, enabled: boolean = true) {
     ws.on('audio_features', (data) => dispatch({ type: 'AUDIO_FEATURES', data: data as AudioFeatureData }));
     ws.on('engagement_alert', (data) => dispatch({ type: 'ENGAGEMENT_ALERT', data: data as EngagementAlertData }));
     ws.on('name_map', (data) => dispatch({ type: 'NAME_MAP', data: data as Record<string, string> }));
-    ws.on('speaker_update', (data) => dispatch({ type: 'SPEAKER_UPDATE', data: data as { start_time: number; speaker: string } }));
     ws.on('complete', () => dispatch({ type: 'COMPLETE' }));
 
     ws.connect(videoId);

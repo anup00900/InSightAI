@@ -18,7 +18,7 @@ function FlagIcon({ type, severity }: { type: string; severity: string }) {
 export default function FlagTimeline({ flags }: Props) {
   if (flags.length === 0) {
     return (
-      <div className="bg-bg-card border border-border rounded-xl p-6">
+      <div className="glass-card p-6">
         <h3 className="text-sm font-semibold text-text-secondary mb-4 uppercase tracking-wider">
           Critical Moments
         </h3>
@@ -28,7 +28,7 @@ export default function FlagTimeline({ flags }: Props) {
   }
 
   return (
-    <div className="bg-bg-card border border-border rounded-xl p-6">
+    <div className="glass-card p-6">
       <h3 className="text-sm font-semibold text-text-secondary mb-4 uppercase tracking-wider">
         Critical Moments
       </h3>

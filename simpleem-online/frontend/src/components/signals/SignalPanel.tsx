@@ -1,4 +1,5 @@
-import type { ReactNode } from 'react';
+import { type ReactNode, useState } from 'react';
+import { ChevronDown, ChevronUp } from 'lucide-react';
 import { formatTime } from '../../lib/api';
 
 interface Props {
@@ -7,19 +8,24 @@ interface Props {
   color: string;
   lastUpdate?: number | null;
   children: ReactNode;
+  defaultExpanded?: boolean;
 }
 
-export default function SignalPanel({ icon, title, color, lastUpdate, children }: Props) {
+export default function SignalPanel({ icon, title, color, lastUpdate, children, defaultExpanded = false }: Props) {
+  const [expanded, setExpanded] = useState(defaultExpanded);
   const hasData = lastUpdate != null;
 
   return (
     <div
-      className="bg-bg-card border rounded-xl p-4 min-w-[200px] flex-1 transition-all duration-300"
+      className="glass-card p-4 min-w-[200px] flex-1 transition-all duration-300"
       style={{
         borderColor: hasData ? `${color}30` : undefined,
       }}
     >
-      <div className="flex items-center justify-between mb-3">
+      <div
+        className="flex items-center justify-between cursor-pointer select-none"
+        onClick={() => setExpanded(!expanded)}
+      >
         <div className="flex items-center gap-2">
           <div
             className="w-7 h-7 rounded-lg flex items-center justify-center transition-all duration-500"
@@ -31,13 +37,19 @@ export default function SignalPanel({ icon, title, color, lastUpdate, children }
             {title}
           </h4>
         </div>
-        {hasData && (
-          <span className="text-[10px] text-text-muted tabular-nums">
-            {formatTime(lastUpdate)}
-          </span>
-        )}
+        <div className="flex items-center gap-2">
+          {hasData && (
+            <span className="text-[10px] text-text-muted tabular-nums">
+              {formatTime(lastUpdate)}
+            </span>
+          )}
+          {expanded
+            ? <ChevronUp className="w-3.5 h-3.5 text-text-muted" />
+            : <ChevronDown className="w-3.5 h-3.5 text-text-muted" />
+          }
+        </div>
       </div>
-      <div className="animate-fade-in">{children}</div>
+      {expanded && <div className="animate-fade-in mt-3">{children}</div>}
     </div>
   );
 }

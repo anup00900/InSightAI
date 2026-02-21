@@ -30,7 +30,7 @@ export default function SpeakingDonut({ participants }: Props) {
   const hasData = normalized.some((d) => d.value > 0);
 
   return (
-    <div className="bg-bg-card border border-border rounded-xl p-6">
+    <div className="glass-card p-6">
       <h3 className="text-sm font-semibold text-text-secondary mb-4 uppercase tracking-wider">
         Speaking Distribution
       </h3>

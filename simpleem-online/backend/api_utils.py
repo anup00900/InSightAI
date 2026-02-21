@@ -74,3 +74,38 @@ async def safe_api_call(
         logger.error(f"[{label}] All attempts failed, using fallback")
         return fallback
     raise last_error or RuntimeError(f"{label} failed with no error captured")
+
+
+async def cascade_api_call(
+    coro_factories: list,
+    *,
+    timeout: float = API_TIMEOUT,
+    required_keys: list[str] | None = None,
+    fallback: dict | list | None = None,
+    label: str = "cascade_api_call",
+) -> dict | list:
+    """Try a list of coroutine factories in order. First success wins.
+
+    Used for summary/finalization where accuracy matters more than latency.
+    Each factory is tried once; on failure the next is attempted.
+    """
+    last_error = None
+    for i, factory in enumerate(coro_factories):
+        model_label = f"{label}[{i}]"
+        try:
+            result = await asyncio.wait_for(factory(), timeout=timeout)
+            if required_keys and isinstance(result, dict):
+                missing = [k for k in required_keys if k not in result]
+                if missing:
+                    logger.warning(f"[{model_label}] Response missing keys: {missing}")
+                    continue
+            logger.info(f"[{model_label}] Succeeded")
+            return result
+        except Exception as e:
+            last_error = e
+            logger.warning(f"[{model_label}] Failed: {e}, trying next...")
+
+    if fallback is not None:
+        logger.error(f"[{label}] All cascade models failed, using fallback")
+        return fallback
+    raise last_error or RuntimeError(f"{label} cascade exhausted")

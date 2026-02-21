@@ -65,7 +65,7 @@ export default function ParticipantSidebar({ participants, selectedId, onSelect 
   };
 
   return (
-    <div className="bg-bg-card border border-border rounded-xl p-4">
+    <div className="glass-card p-4">
       <h3 className="text-sm font-semibold text-text-secondary mb-3 uppercase tracking-wider">
         Participants ({participants.length})
       </h3>
@@ -78,7 +78,7 @@ export default function ParticipantSidebar({ participants, selectedId, onSelect 
               flex items-center gap-3 p-3 rounded-lg cursor-pointer transition-all
               ${selectedId === p.id
                 ? 'bg-accent/10 border border-accent/30'
-                : 'hover:bg-bg-card-hover border border-transparent'
+                : 'glass-card-hover border border-transparent'
               }
             `}
           >

@@ -138,6 +138,8 @@ async def _download_video_from_url(video_id: str, url: str, name: str):
             # Rename to include video_id prefix
             ext = os.path.splitext(result.file_path)[1]
             safe_name = f"{name.rsplit('.', 1)[0] if '.' in name else name}{ext}"
+            # Remove any unsafe characters from filename
+            safe_name = "".join(c if c.isalnum() or c in "._- " else "_" for c in safe_name)
             final_path = os.path.join(UPLOAD_DIR, f"{video_id}_{safe_name}")
             os.rename(result.file_path, final_path)
 
@@ -153,9 +155,10 @@ async def _download_video_from_url(video_id: str, url: str, name: str):
             )
             logger.info(f"[{video_id[:8]}] Video ready (via {result.strategy})")
         else:
+            # Download failed — keep name intact, set status to download_failed
             await db.execute(
-                "UPDATE videos SET status = ?, filename = ? WHERE id = ?",
-                ("url", f"error: {result.error[:200]}", video_id),
+                "UPDATE videos SET status = ? WHERE id = ?",
+                ("download_failed", video_id),
             )
             logger.warning(f"[{video_id[:8]}] Download failed: {result.error}")
         await db.commit()
@@ -193,8 +196,8 @@ async def list_videos() -> list[VideoOut]:
         return [
             VideoOut(
                 id=r["id"], name=r["name"], filename=r["filename"],
-                duration=r["duration"], status=r["status"],
-                created_at=r["created_at"], overall_score=r["overall_score"],
+                duration=r["duration"] or 0, status=r["status"],
+                created_at=r["created_at"], overall_score=r["overall_score"] or 0.0,
                 source_url=r["source_url"] if "source_url" in r.keys() else "",
             )
             for r in rows
@@ -246,8 +249,8 @@ async def get_video(video_id: str) -> VideoOut:
             raise HTTPException(404, "Video not found")
         return VideoOut(
             id=r["id"], name=r["name"], filename=r["filename"],
-            duration=r["duration"], status=r["status"],
-            created_at=r["created_at"], overall_score=r["overall_score"],
+            duration=r["duration"] or 0, status=r["status"],
+            created_at=r["created_at"], overall_score=r["overall_score"] or 0.0,
             source_url=r["source_url"] if "source_url" in r.keys() else "",
         )
 
@@ -555,6 +558,71 @@ async def rename_participant(video_id: str, participant_id: str, req: RenamePart
 
     logger.info(f"Renamed participant {participant_id} to '{new_name}' in video {video_id[:8]}")
     return {"status": "ok", "name": new_name}
+
+
+@app.post("/api/videos/{video_id}/generate-summary")
+async def generate_summary_on_demand(video_id: str):
+    """Generate summary + meeting notes from accumulated transcript data.
+    Works mid-playback (uses whatever data is available) or after completion."""
+    from .core42_client import generate_summary_and_flags
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute("SELECT * FROM videos WHERE id = ?", (video_id,))
+        video = await cursor.fetchone()
+        if not video:
+            raise HTTPException(404, "Video not found")
+
+        # Gather available data
+        cursor = await db.execute(
+            "SELECT * FROM transcript_segments WHERE video_id = ? ORDER BY start_time",
+            (video_id,),
+        )
+        transcript_rows = await cursor.fetchall()
+
+        cursor = await db.execute(
+            "SELECT * FROM participants WHERE video_id = ?", (video_id,),
+        )
+        participant_rows = await cursor.fetchall()
+
+        cursor = await db.execute(
+            "SELECT * FROM signal_snapshots WHERE video_id = ? ORDER BY timestamp",
+            (video_id,),
+        )
+        snapshot_rows = await cursor.fetchall()
+
+    transcript_text = "\n".join(
+        f"[{r['start_time']:.1f}s]: {r['text']}" for r in transcript_rows
+    ) if transcript_rows else "No transcript available yet."
+
+    participant_names = [r["name"] for r in participant_rows] if participant_rows else ["Person 1"]
+
+    emotions_summary = json.dumps([
+        {"timestamp": r["timestamp"], "emotion": r["emotion"], "engagement": r["engagement"]}
+        for r in snapshot_rows[:30]
+    ]) if snapshot_rows else "[]"
+
+    analysis = await generate_summary_and_flags(
+        transcript_text[:8000],
+        emotions_summary[:4000],
+        participant_names,
+    )
+
+    # Persist summary to DB
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """INSERT OR REPLACE INTO summaries (video_id, summary, key_topics, overall_sentiment)
+               VALUES (?, ?, ?, ?)""",
+            (video_id, analysis.get("summary", ""), json.dumps(analysis.get("key_topics", [])),
+             analysis.get("overall_sentiment", "neutral")),
+        )
+        await db.commit()
+
+    return {
+        "summary": analysis.get("summary", ""),
+        "key_topics": analysis.get("key_topics", []),
+        "overall_sentiment": analysis.get("overall_sentiment", "neutral"),
+    }
 
 
 @app.get("/api/videos/{video_id}/export/pdf")

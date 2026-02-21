@@ -10,7 +10,7 @@ interface Props {
 export default function SkillRadar({ participant }: Props) {
   if (!participant) {
     return (
-      <div className="bg-bg-card border border-border rounded-xl p-6">
+      <div className="glass-card p-6">
         <h3 className="text-sm font-semibold text-text-secondary mb-4 uppercase tracking-wider">
           Skill Radar
         </h3>
@@ -30,7 +30,7 @@ export default function SkillRadar({ participant }: Props) {
   const hasData = data.some((d) => d.value > 0);
 
   return (
-    <div className="bg-bg-card border border-border rounded-xl p-6">
+    <div className="glass-card p-6">
       <h3 className="text-sm font-semibold text-text-secondary mb-1 uppercase tracking-wider">
         Skill Radar
       </h3>

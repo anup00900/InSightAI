@@ -18,7 +18,7 @@ const signalColors: Record<string, string> = {
 export default function CorrelationPanel({ correlations }: Props) {
   if (correlations.length === 0) {
     return (
-      <div className="bg-bg-card border border-border rounded-xl p-4">
+      <div className="glass-card p-4">
         <div className="flex items-center gap-2 mb-3">
           <div className="w-7 h-7 rounded-lg bg-teal-500/20 flex items-center justify-center">
             <GitBranch className="w-4 h-4 text-teal-400" />
@@ -33,7 +33,7 @@ export default function CorrelationPanel({ correlations }: Props) {
   }
 
   return (
-    <div className="bg-bg-card border border-border rounded-xl p-4">
+    <div className="glass-card p-4">
       <div className="flex items-center gap-2 mb-3">
         <div className="w-7 h-7 rounded-lg bg-teal-500/20 flex items-center justify-center">
           <GitBranch className="w-4 h-4 text-teal-400" />

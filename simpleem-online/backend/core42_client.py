@@ -8,7 +8,7 @@ import asyncio
 from openai import AsyncAzureOpenAI, AsyncOpenAI
 from dotenv import load_dotenv
 
-from .api_utils import safe_api_call
+from .api_utils import safe_api_call, cascade_api_call
 
 load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
 
@@ -38,6 +38,32 @@ VISION_MODEL = os.getenv("VISION_MODEL", "gpt-4o")
 CHAT_MODEL = os.getenv("CHAT_MODEL", "gpt-4.1")
 WHISPER_MODEL = os.getenv("WHISPER_MODEL", "whisper-1")
 
+# ─── Multi-model pools ─────────────────────────────────────────────
+VISION_MODELS = [m.strip() for m in os.getenv("VISION_MODELS", "gpt-4o,gpt-4.1").split(",")]
+TEXT_MODELS = [m.strip() for m in os.getenv("TEXT_MODELS", "gpt-4.1,gpt-4o-mini").split(",")]
+SUMMARY_MODELS = [m.strip() for m in os.getenv("SUMMARY_MODELS", "gpt-4.1,gpt-4o").split(",")]
+
+_frame_counter = 0
+
+
+def _next_vision_model() -> str:
+    """Round-robin vision model selection."""
+    global _frame_counter
+    model = VISION_MODELS[_frame_counter % len(VISION_MODELS)]
+    _frame_counter += 1
+    return model
+
+
+_text_counter = 0
+
+
+def _next_text_model() -> str:
+    """Round-robin text model selection."""
+    global _text_counter
+    model = TEXT_MODELS[_text_counter % len(TEXT_MODELS)]
+    _text_counter += 1
+    return model
+
 
 async def transcribe_audio(audio_path: str) -> dict:
     """Transcribe audio using Core42 transcription model via OpenAI-compatible endpoint."""
@@ -47,6 +73,7 @@ async def transcribe_audio(audio_path: str) -> dict:
                 response = await audio_client.audio.transcriptions.create(
                     model=WHISPER_MODEL,
                     file=f,
+                    language="en",
                     response_format="verbose_json",
                     timestamp_granularities=["segment"],
                 )
@@ -56,6 +83,7 @@ async def transcribe_audio(audio_path: str) -> dict:
                 response = await audio_client.audio.transcriptions.create(
                     model=WHISPER_MODEL,
                     file=f,
+                    language="en",
                     response_format="verbose_json",
                 )
         return response.model_dump() if hasattr(response, "model_dump") else dict(response)
@@ -66,6 +94,168 @@ async def transcribe_audio(audio_path: str) -> dict:
         fallback={"segments": [], "text": ""},
         label="transcribe_audio",
     )
+
+
+async def cleanup_transcription(raw_text: str, timestamp: float) -> str:
+    """Use a text model to clean up and verify Whisper transcription output.
+
+    Fixes common Whisper errors: hallucinated words, repeated phrases,
+    broken sentences, and garbled text. Returns cleaned text.
+    """
+    if not raw_text or len(raw_text.strip()) < 5:
+        return raw_text
+
+    text_model = _next_text_model()
+
+    async def _call():
+        response = await client.chat.completions.create(
+            model=text_model,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a transcription editor. Fix errors in speech-to-text output. "
+                        "Rules:\n"
+                        "1. Fix obvious transcription errors (wrong words, garbled text)\n"
+                        "2. Remove repeated phrases/stutters that are clearly transcription artifacts\n"
+                        "3. Keep the meaning EXACTLY the same — do NOT add, remove, or rephrase content\n"
+                        "4. If the text is already clean, return it unchanged\n"
+                        "5. Return ONLY the cleaned text, nothing else"
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": f"Clean up this transcription:\n\n{raw_text}",
+                },
+            ],
+            max_completion_tokens=300,
+            temperature=0.1,
+        )
+        return response.choices[0].message.content.strip()
+
+    return await safe_api_call(
+        _call,
+        timeout=10,
+        fallback=raw_text,
+        label=f"cleanup_transcription[{text_model}]",
+    )
+
+
+def _validate_speaker(speaker: str, known_names: list[str]) -> str:
+    """Validate a speaker name against known names. Returns canonical name or empty string."""
+    if not speaker:
+        return ""
+    if not known_names:
+        return speaker.strip().title()
+    bl = speaker.lower().strip()
+    for kn in known_names:
+        kl = kn.lower().strip()
+        if bl == kl:
+            return kn
+        s_words = set(w for w in bl.split() if len(w) >= 3)
+        k_words = set(w for w in kl.split() if len(w) >= 3)
+        if s_words & k_words:
+            return kn
+        if len(bl) >= 3 and len(kl) >= 3 and (bl in kl or kl in bl):
+            return kn
+    return speaker.strip().title()
+
+
+async def build_speaker_buckets(
+    speaking_timeline: list[dict],
+    bucket_size: float = 10.0,
+) -> dict[int, str]:
+    """Pre-compute dominant speaker per time bucket from the speaking timeline.
+
+    Divides the timeline into fixed-size buckets. For each bucket, the speaker
+    with the MOST detections wins — but ONLY if they have 2+ detections AND
+    at least 2x the count of the runner-up (clear dominance).
+
+    Returns: {bucket_index: speaker_name} for confident buckets only.
+    Empty buckets or ambiguous ones are omitted.
+    """
+    if not speaking_timeline:
+        return {}
+
+    # Group detections into buckets
+    buckets: dict[int, dict[str, int]] = {}
+    for entry in speaking_timeline:
+        ts = entry.get("timestamp", 0)
+        speaker = entry.get("speaker", "")
+        if not speaker:
+            continue
+        bucket_idx = int(ts / bucket_size)
+        if bucket_idx not in buckets:
+            buckets[bucket_idx] = {}
+        buckets[bucket_idx][speaker] = buckets[bucket_idx].get(speaker, 0) + 1
+
+    # Determine dominant speaker per bucket
+    result: dict[int, str] = {}
+    for bucket_idx, votes in buckets.items():
+        if not votes:
+            continue
+        ranked = sorted(votes.items(), key=lambda x: x[1], reverse=True)
+        top_speaker, top_count = ranked[0]
+        runner_up_count = ranked[1][1] if len(ranked) > 1 else 0
+
+        # Require: 2+ detections AND clear dominance (2x runner-up)
+        if top_count >= 2 and top_count >= runner_up_count * 2:
+            result[bucket_idx] = top_speaker
+
+    return result
+
+
+async def attribute_speaker_from_context(
+    _transcript_text: str,
+    speaking_timeline: list[dict],
+    known_names: list[str],
+    timestamp: float,
+    speaker_buckets: dict[int, str] | None = None,
+) -> str:
+    """Attribute a transcript segment to the speaker detected visually.
+
+    Uses pre-computed speaker buckets (10s windows with clear dominance).
+    Falls back to direct ±5s consensus if buckets not provided.
+
+    Returns empty string when confidence is low. Wrong attribution
+    is worse than none (inflates speaking% for wrong person).
+    """
+    if not speaking_timeline:
+        return ""
+
+    # If speaker_buckets provided (deferred mode), use them directly
+    if speaker_buckets is not None:
+        bucket_idx = int(timestamp / 10.0)
+        # Check current bucket and neighbors (handles boundary cases)
+        for idx in [bucket_idx, bucket_idx - 1, bucket_idx + 1]:
+            if idx in speaker_buckets:
+                speaker = speaker_buckets[idx]
+                resolved = _validate_speaker(speaker, known_names)
+                if resolved:
+                    return resolved
+        return ""
+
+    # Live mode: simple ±5s consensus
+    WINDOW = 5.0
+    votes: dict[str, int] = {}
+    for entry in speaking_timeline:
+        dist = abs(entry.get("timestamp", 0) - timestamp)
+        if dist <= WINDOW:
+            speaker = entry.get("speaker", "")
+            if speaker:
+                votes[speaker] = votes.get(speaker, 0) + 1
+
+    if votes:
+        ranked = sorted(votes.items(), key=lambda x: x[1], reverse=True)
+        top_speaker, top_count = ranked[0]
+        runner_up_count = ranked[1][1] if len(ranked) > 1 else 0
+        # Require 2+ detections and clear dominance
+        if top_count >= 2 and top_count >= runner_up_count * 2:
+            resolved = _validate_speaker(top_speaker, known_names)
+            if resolved:
+                return resolved
+
+    return ""
 
 
 async def analyze_frame_emotions(frame_path: str, timestamp: float) -> dict:
@@ -125,19 +315,21 @@ async def analyze_frame_emotions(frame_path: str, timestamp: float) -> dict:
                     ],
                 },
             ],
-            max_tokens=800,
+            max_completion_tokens=800,
             temperature=0.3,
         )
         content = _strip_json_markdown(response.choices[0].message.content)
         return json.loads(content)
 
-    return await safe_api_call(
+    result = await safe_api_call(
         _call,
         timeout=30,
         required_keys=["participants"],
         fallback=fallback,
         label="analyze_frame_emotions",
     )
+    del img_data  # Free base64 memory
+    return result
 
 
 async def analyze_batch_frames(frame_paths: list[tuple[str, float]], batch_size: int = 5) -> list[dict]:
@@ -199,7 +391,7 @@ async def generate_coaching(transcript: str, emotions_summary: str, participant_
                     ),
                 },
             ],
-            max_tokens=800,
+            max_completion_tokens=800,
             temperature=0.5,
         )
         content = _strip_json_markdown(response.choices[0].message.content)
@@ -213,27 +405,55 @@ async def generate_coaching(transcript: str, emotions_summary: str, participant_
     )
 
 
-async def analyze_frame_all_signals(frame_path: str, timestamp: float) -> dict:
+async def analyze_frame_all_signals(
+    frame_path: str,
+    timestamp: float,
+    model_override: str | None = None,
+    known_names: list[str] | None = None,
+) -> dict:
     """Analyze a single frame for ALL visual signals: emotions, body language, gestures, reactions.
 
-    Returns a combined JSON with all 4 visual signal categories in one GPT-4o call.
+    Returns a combined JSON with all 4 visual signal categories in one API call.
+    Uses round-robin model rotation unless model_override is specified.
+    When known_names is provided, the model reads actual name labels from the meeting UI
+    and uses those instead of generic "Person N" labels.
     """
     with open(frame_path, "rb") as f:
         img_data = base64.b64encode(f.read()).decode("utf-8")
 
+    first_name = known_names[0] if known_names else "Person 1"
     fallback = {
         "participants": [{
-            "label": "Person 1",
+            "label": first_name,
             "emotions": {"primary": "neutral", "confidence": 0.5, "engagement": 50},
             "body_language": {"posture": "upright", "openness": "mixed", "leaning": "neutral", "mirroring": False, "description": "unable to analyze"},
-            "gestures": ["still posture", "resting hands"],
-            "reactions": ["neutral gaze", "steady expression"],
+            "gestures": [],
+            "reactions": [],
         }]
     }
 
+    vision_model = model_override or _next_vision_model()
+
+    # Build name instruction based on whether we have known names
+    if known_names and len(known_names) >= 2:
+        name_instruction = (
+            f"3. KNOWN PARTICIPANTS (first names): {', '.join(known_names)}. "
+            "Match each person to one of these first names as the 'label' field. "
+            "Use ONLY the first name (e.g., 'Sarang' not 'Sarang Zendehrooh'). "
+            "If you cannot match a person, use the closest known first name based on position. "
+            "Do NOT use generic 'Person 1', 'Person 2' labels — always use first names.\n"
+        )
+        example_label = f'"label": "{first_name}"'
+    else:
+        name_instruction = (
+            "3. Label participants as 'Person 1', 'Person 2', etc. numbered left-to-right, "
+            "top-to-bottom.\n"
+        )
+        example_label = '"label": "Person 1"'
+
     async def _call():
         response = await client.chat.completions.create(
-            model=VISION_MODEL,
+            model=vision_model,
             messages=[
                 {
                     "role": "system",
@@ -242,19 +462,24 @@ async def analyze_frame_all_signals(frame_path: str, timestamp: float) -> dict:
                         "Analyze the video frame for EVERY visible person across 4 signal categories: "
                         "emotions, body language, gestures, and micro-reactions. "
                         "CRITICAL RULES:\n"
-                        "1. Count EVERY person visible — in the center, edges, corners, background, partially hidden. "
-                        "Even small faces or partially cropped people MUST be included.\n"
+                        "1. Identify ALL participants in video tiles/gallery view. "
+                        "Do NOT count profile pictures, avatars, chat windows, UI buttons, "
+                        "shared screens, or presentation slides as people. "
+                        "Only count actual video tile participants.\n"
                         "2. For camera-OFF participants (colored circles with initials): "
-                        "include them with engagement 30, emotions 'passive'.\n"
-                        "3. ALWAYS label participants as 'Person 1', 'Person 2', etc. numbered left-to-right, "
-                        "top-to-bottom. Do NOT use real names — only 'Person N' labels.\n"
-                        "4. gestures array MUST contain 2-4 items per person. Examples: nodding, hand wave, "
-                        "pointing, arms crossed, head tilt, resting hands, still posture, chin rest, "
-                        "open palms, clasped hands, touching face, hand on table, leaning on elbow.\n"
-                        "5. reactions array MUST contain 2-4 items per person. Examples: eyebrow raise, "
-                        "smile flash, lip press, neutral gaze, steady eye contact, slight nod, "
-                        "soft smile, focused expression, attentive look, blink.\n"
+                        "include them with engagement 30, emotions 'passive', is_speaking false.\n"
+                        + name_instruction +
+                        "4. gestures array MUST contain 2-4 items per person.\n"
+                        "5. reactions array MUST contain 2-4 items per person.\n"
                         "6. NEVER return empty arrays for gestures or reactions.\n"
+                        "7. SPEAKER DETECTION — look for these cues to identify who is CURRENTLY speaking:\n"
+                        "   - Microsoft Teams: active speaker has a PURPLE/BLUE border around their tile\n"
+                        "   - Zoom: active speaker has a GREEN/YELLOW border\n"
+                        "   - Google Meet: active speaker tile is highlighted/enlarged\n"
+                        "   - Also look for: mouth clearly open/moving, animated hand gestures while talking\n"
+                        "   - Set is_speaking=true for EXACTLY ONE person (the active speaker)\n"
+                        "   - If nobody appears to be speaking, set ALL to is_speaking=false\n"
+                        "   - A speaking person should have engagement >= 65\n"
                         "Return structured JSON."
                     ),
                 },
@@ -270,70 +495,75 @@ async def analyze_frame_all_signals(frame_path: str, timestamp: float) -> dict:
                                 "2. BODY LANGUAGE: posture (upright/slouched/leaning), "
                                 "openness (open/closed/mixed), leaning direction (forward/back/neutral), "
                                 "mirroring (true/false)\n"
-                                "3. GESTURES: list of detected gestures — ALWAYS include at least 1-2 "
-                                "(e.g. nodding, hand wave, pointing, arms crossed, thumbs up, head tilt, "
-                                "shrug, resting hands, still posture, chin rest, hand on table, open palms, "
-                                "clasped hands, touching face)\n"
-                                "4. REACTIONS: micro-expressions or quick reactions — ALWAYS include at least 1-2 "
-                                "(e.g. eyebrow raise, smile flash, lip press, eye roll, head shake, "
-                                "neutral gaze, steady eye contact, slight nod, blink, jaw clench, "
-                                "soft smile, focused expression)\n\n"
-                                "IMPORTANT: gestures and reactions arrays must NEVER be empty.\n\n"
+                                "3. GESTURES: 2-4 items per person\n"
+                                "4. REACTIONS: 2-4 micro-expressions per person\n"
+                                "5. IS_SPEAKING: Look for platform speaker highlight (colored border around tile) "
+                                "or mouth movement. Set true for EXACTLY ONE person if someone is speaking.\n\n"
                                 "Return ONLY valid JSON:\n"
                                 '{"participants": [{'
-                                '"label": "Person 1", '
+                                + example_label + ', '
+                                '"is_speaking": true, '
                                 '"emotions": {"primary": "engaged", "confidence": 0.85, "engagement": 78}, '
                                 '"body_language": {"posture": "upright", "openness": "open", '
                                 '"leaning": "forward", "mirroring": false, "description": "leaning forward attentively"}, '
-                                '"gestures": ["nodding", "open palms", "resting hands on table"], '
+                                '"gestures": ["nodding", "open palms"], '
                                 '"reactions": ["slight smile", "steady eye contact"]'
-                                "}]}"
+                                '}]}'
                             ),
                         },
                         {
                             "type": "image_url",
                             "image_url": {
                                 "url": f"data:image/jpeg;base64,{img_data}",
-                                "detail": "low",
+                                "detail": "auto",
                             },
                         },
                     ],
                 },
             ],
-            max_tokens=2000,
-            temperature=0.3,
+            max_completion_tokens=2000,
+            temperature=0.2,
         )
         content = _strip_json_markdown(response.choices[0].message.content)
         parsed = json.loads(content)
-        # Post-process: ensure every participant has non-empty gestures/reactions
+        # Post-process: ensure keys exist but let model provide real content
         for p in parsed.get("participants", []):
-            if not p.get("gestures"):
-                p["gestures"] = ["still posture", "resting hands"]
-            if not p.get("reactions"):
-                p["reactions"] = ["neutral gaze", "steady expression"]
+            if "gestures" not in p:
+                p["gestures"] = []
+            if "reactions" not in p:
+                p["reactions"] = []
+            # Enforce: speaking person must have engagement >= 65
+            if p.get("is_speaking") and p.get("emotions", {}).get("engagement", 0) < 65:
+                p["emotions"]["engagement"] = max(65, p["emotions"].get("engagement", 50))
         return parsed
 
-    return await safe_api_call(
+    result = await safe_api_call(
         _call,
         timeout=30,
         required_keys=["participants"],
         fallback=fallback,
-        label="analyze_frame_all_signals",
+        label=f"analyze_frame_all_signals[{vision_model}]",
     )
+    del img_data  # Free base64 memory immediately
+    return result
 
 
-async def extract_names_from_frame(frame_path: str) -> dict[str, str]:
+async def extract_names_from_frame(frame_path: str, model: str | None = None) -> dict[str, str]:
     """Extract participant names from meeting UI name labels/overlays (Zoom/Teams/Meet).
 
-    Uses GPT-4o vision with high detail to OCR name tags visible in the frame.
+    Uses the specified vision model (or default) with high detail to OCR name tags.
     Returns a mapping like {"Person 1": "Anup Roy", "Person 2": "Jane Doe"}.
+    When called alongside signal analysis, pass the same model to ensure consistent
+    Person N numbering.
     """
     with open(frame_path, "rb") as f:
         img_data = base64.b64encode(f.read()).decode("utf-8")
 
+    use_model = model or VISION_MODEL
+
     async def _call():
         response = await client.chat.completions.create(
-            model=VISION_MODEL,
+            model=use_model,
             messages=[
                 {
                     "role": "system",
@@ -378,18 +608,20 @@ async def extract_names_from_frame(frame_path: str) -> dict[str, str]:
                     ],
                 },
             ],
-            max_tokens=800,
+            max_completion_tokens=800,
             temperature=0.2,
         )
         content = _strip_json_markdown(response.choices[0].message.content)
         return json.loads(content)
 
-    return await safe_api_call(
+    result = await safe_api_call(
         _call,
         timeout=30,
         fallback={},
         label="extract_names_from_frame",
     )
+    del img_data  # Free base64 memory
+    return result
 
 
 async def assign_speakers_to_names(
@@ -440,7 +672,7 @@ async def assign_speakers_to_names(
                     ),
                 },
             ],
-            max_tokens=1000,
+            max_completion_tokens=1000,
             temperature=0.3,
         )
         content = _strip_json_markdown(response.choices[0].message.content)
@@ -461,12 +693,13 @@ async def assign_speakers_to_names(
 
 
 async def analyze_voice_signal(transcript_chunk: str) -> dict:
-    """Infer voice signal (tone, pace, dynamics) from a transcript chunk using GPT-4.1."""
+    """Infer voice signal (tone, pace, dynamics) from a transcript chunk. Uses round-robin text models."""
     fallback = {"tone": "neutral", "pace": "moderate", "energy": 50, "dynamics": "unable to analyze"}
+    text_model = _next_text_model()
 
     async def _call():
         response = await client.chat.completions.create(
-            model=CHAT_MODEL,
+            model=text_model,
             messages=[
                 {
                     "role": "system",
@@ -490,7 +723,7 @@ async def analyze_voice_signal(transcript_chunk: str) -> dict:
                     ),
                 },
             ],
-            max_tokens=200,
+            max_completion_tokens=200,
             temperature=0.3,
         )
         content = _strip_json_markdown(response.choices[0].message.content)
@@ -500,17 +733,18 @@ async def analyze_voice_signal(transcript_chunk: str) -> dict:
         _call,
         timeout=15,
         fallback=fallback,
-        label="analyze_voice_signal",
+        label=f"analyze_voice_signal[{text_model}]",
     )
 
 
 async def analyze_words_signal(transcript_chunk: str, timestamp: float) -> dict:
-    """Analyze word-level signals: sentiment, keywords, key phrases using GPT-4.1."""
+    """Analyze word-level signals: sentiment, keywords, key phrases. Uses round-robin text models."""
     fallback = {"sentiment": "neutral", "sentiment_score": 0.5, "keywords": [], "key_phrases": []}
+    text_model = _next_text_model()
 
     async def _call():
         response = await client.chat.completions.create(
-            model=CHAT_MODEL,
+            model=text_model,
             messages=[
                 {
                     "role": "system",
@@ -532,7 +766,7 @@ async def analyze_words_signal(transcript_chunk: str, timestamp: float) -> dict:
                     ),
                 },
             ],
-            max_tokens=300,
+            max_completion_tokens=300,
             temperature=0.3,
         )
         content = _strip_json_markdown(response.choices[0].message.content)
@@ -542,7 +776,7 @@ async def analyze_words_signal(transcript_chunk: str, timestamp: float) -> dict:
         _call,
         timeout=15,
         fallback=fallback,
-        label="analyze_words_signal",
+        label=f"analyze_words_signal[{text_model}]",
     )
 
 
@@ -579,7 +813,7 @@ async def analyze_personality(signals_summary: str, transcript: str) -> dict:
                     ),
                 },
             ],
-            max_tokens=600,
+            max_completion_tokens=600,
             temperature=0.4,
         )
         content = _strip_json_markdown(response.choices[0].message.content)
@@ -623,7 +857,7 @@ async def build_correlations(all_signals: str, transcript: str) -> dict:
                     ),
                 },
             ],
-            max_tokens=800,
+            max_completion_tokens=800,
             temperature=0.4,
         )
         content = _strip_json_markdown(response.choices[0].message.content)
@@ -639,7 +873,7 @@ async def build_correlations(all_signals: str, transcript: str) -> dict:
 
 
 async def generate_summary_and_flags(transcript: str, emotions_summary: str, participant_names: list[str]) -> dict:
-    """Generate meeting summary and critical moment flags."""
+    """Generate meeting summary and critical moment flags. Uses cascade across summary model pool."""
     fallback = {
         "summary": "Meeting analysis completed. Unable to parse detailed results.",
         "key_topics": ["meeting"],
@@ -656,49 +890,51 @@ async def generate_summary_and_flags(transcript: str, emotions_summary: str, par
         ],
     }
 
-    async def _call():
-        response = await client.chat.completions.create(
-            model=CHAT_MODEL,
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "You are an expert meeting analyst. Analyze the meeting data and provide "
-                        "a comprehensive summary, identify critical moments, and assess overall dynamics."
-                    ),
-                },
-                {
-                    "role": "user",
-                    "content": (
-                        "Analyze this meeting and provide:\n"
-                        "1. A 2-3 paragraph summary\n"
-                        "2. Key topics discussed\n"
-                        "3. Critical moments (positive and negative flags with timestamps)\n"
-                        "4. Overall sentiment\n"
-                        "5. Engagement and rapport scores per participant\n\n"
-                        f"PARTICIPANTS: {', '.join(participant_names)}\n\n"
-                        f"TRANSCRIPT:\n{transcript}\n\n"
-                        f"EMOTION DATA:\n{emotions_summary}\n\n"
-                        "Return ONLY valid JSON:\n"
-                        "{\n"
-                        '  "summary": "...",\n'
-                        '  "key_topics": ["topic1", "topic2"],\n'
-                        '  "overall_sentiment": "positive|neutral|negative",\n'
-                        '  "flags": [{"timestamp": 0.0, "type": "positive|negative", "description": "...", "severity": "low|medium|high"}],\n'
-                        '  "participant_scores": [{"name": "...", "engagement": 0-100, "sentiment": -1.0 to 1.0, '
-                        '"speaking_pct": 0-100, "clarity": 0-100, "rapport": 0-100, "energy": 0-100}]\n'
-                        "}"
-                    ),
-                },
-            ],
-            max_tokens=2000,
-            temperature=0.4,
-        )
-        content = _strip_json_markdown(response.choices[0].message.content)
-        return json.loads(content)
+    def _make_call(model: str):
+        async def _call():
+            response = await client.chat.completions.create(
+                model=model,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "You are an expert meeting analyst. Analyze the meeting data and provide "
+                            "a comprehensive summary, identify critical moments, and assess overall dynamics."
+                        ),
+                    },
+                    {
+                        "role": "user",
+                        "content": (
+                            "Analyze this meeting and provide:\n"
+                            "1. A 2-3 paragraph summary\n"
+                            "2. Key topics discussed\n"
+                            "3. Critical moments (positive and negative flags with timestamps)\n"
+                            "4. Overall sentiment\n"
+                            "5. Engagement and rapport scores per participant\n\n"
+                            f"PARTICIPANTS: {', '.join(participant_names)}\n\n"
+                            f"TRANSCRIPT:\n{transcript}\n\n"
+                            f"EMOTION DATA:\n{emotions_summary}\n\n"
+                            "Return ONLY valid JSON:\n"
+                            "{\n"
+                            '  "summary": "...",\n'
+                            '  "key_topics": ["topic1", "topic2"],\n'
+                            '  "overall_sentiment": "positive|neutral|negative",\n'
+                            '  "flags": [{"timestamp": 0.0, "type": "positive|negative", "description": "...", "severity": "low|medium|high"}],\n'
+                            '  "participant_scores": [{"name": "...", "engagement": 0-100, "sentiment": -1.0 to 1.0, '
+                            '"speaking_pct": 0-100, "clarity": 0-100, "rapport": 0-100, "energy": 0-100}]\n'
+                            "}"
+                        ),
+                    },
+                ],
+                max_completion_tokens=2000,
+                temperature=0.4,
+            )
+            content = _strip_json_markdown(response.choices[0].message.content)
+            return json.loads(content)
+        return _call
 
-    return await safe_api_call(
-        _call,
+    return await cascade_api_call(
+        [_make_call(m) for m in SUMMARY_MODELS],
         timeout=60,
         required_keys=["summary", "participant_scores"],
         fallback=fallback,

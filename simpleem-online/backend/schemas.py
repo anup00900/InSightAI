@@ -9,7 +9,7 @@ class VideoOut(BaseModel):
     duration: float
     status: str
     created_at: str
-    overall_score: float
+    overall_score: float = 0.0
     source_url: str = ""
 
 

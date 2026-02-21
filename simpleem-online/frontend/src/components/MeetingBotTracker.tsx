@@ -97,26 +97,14 @@ export default function MeetingBotTracker({ botId, onDismiss }: Props) {
         throw new Error('Failed to download recording');
       }
 
-      // Get the filename from Content-Disposition header or use default
-      const contentDisposition = response.headers.get('Content-Disposition');
-      let filename = `meeting-${botId}.mp4`;
-      if (contentDisposition) {
-        const filenameMatch = contentDisposition.match(/filename="?(.+)"?/);
-        if (filenameMatch) {
-          filename = filenameMatch[1];
-        }
+      const data = await response.json();
+      const recordingUrl = data.recording_url;
+      if (!recordingUrl) {
+        throw new Error('Recording URL not available');
       }
 
-      // Create blob and trigger download
-      const blob = await response.blob();
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      window.URL.revokeObjectURL(url);
-      document.body.removeChild(a);
+      // Open the actual recording URL in a new tab for download
+      window.open(recordingUrl, '_blank');
     } catch (err) {
       console.error('Error downloading recording:', err);
       setError(err instanceof Error ? err.message : 'Failed to download recording');
@@ -128,7 +116,7 @@ export default function MeetingBotTracker({ botId, onDismiss }: Props) {
   const statusConfig = STATUS_CONFIG[status];
 
   return (
-    <div className="bg-bg-card border border-border rounded-xl p-4">
+    <div className="glass-card p-4">
       <div className="flex items-start justify-between gap-4">
         <div className="flex items-center gap-3 flex-1">
           <div className="p-2 bg-primary/10 rounded-lg">

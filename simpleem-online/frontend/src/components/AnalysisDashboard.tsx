@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { type Video, type AnalysisResults, type Participant, formatTime } from '../lib/api';
 import { useRealtimeAnalysis } from '../hooks/useRealtimeAnalysis';
 import EmotionTimeline from './EmotionTimeline';
@@ -21,7 +21,7 @@ import SignalWeightCard from './SignalWeightCard';
 import {
   Loader2, Clock, Users, TrendingUp,
   FileText, Lightbulb, MessageSquare, BarChart3, Radio, Link2 as Link2Icon, Upload,
-  Circle, Square, Download,
+  Circle, Square, Download, FileDown,
 } from 'lucide-react';
 
 // ─── Screen Recording Hook ──────────────────────────────────────
@@ -32,14 +32,59 @@ function useScreenRecorder(videoName: string) {
   const streamRef = useRef<MediaStream | null>(null);
   const [isRecording, setIsRecording] = useState(false);
   const [recordingTime, setRecordingTime] = useState(0);
+  const [hasAudio, setHasAudio] = useState(true);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const startRecording = useCallback(async () => {
     try {
-      const stream = await navigator.mediaDevices.getDisplayMedia({
+      // Capture screen — request tab audio (Chrome supports this for browser tabs)
+      const displayStream = await navigator.mediaDevices.getDisplayMedia({
         video: { displaySurface: 'browser' } as MediaTrackConstraints,
-        audio: true,
+        audio: {
+          echoCancellation: false,
+          noiseSuppression: false,
+          autoGainControl: false,
+        } as MediaTrackConstraints,
       });
+
+      // Also capture microphone audio as fallback (system audio often missing on macOS)
+      let micStream: MediaStream | null = null;
+      try {
+        micStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+      } catch {
+        console.warn('Microphone access denied — recording without mic audio');
+      }
+
+      // Merge audio tracks: system audio + microphone
+      const audioTracks = [
+        ...displayStream.getAudioTracks(),
+        ...(micStream?.getAudioTracks() || []),
+      ];
+
+      let stream: MediaStream;
+      if (audioTracks.length > 0) {
+        setHasAudio(true);
+        // Mix audio tracks using AudioContext
+        try {
+          const audioCtx = new AudioContext();
+          const dest = audioCtx.createMediaStreamDestination();
+          for (const track of audioTracks) {
+            const source = audioCtx.createMediaStreamSource(new MediaStream([track]));
+            source.connect(dest);
+          }
+          stream = new MediaStream([
+            ...displayStream.getVideoTracks(),
+            ...dest.stream.getAudioTracks(),
+          ]);
+        } catch {
+          // Fallback: use display stream as-is
+          stream = displayStream;
+        }
+      } else {
+        setHasAudio(false);
+        stream = displayStream;
+      }
+
       streamRef.current = stream;
       chunksRef.current = [];
 
@@ -68,7 +113,9 @@ function useScreenRecorder(videoName: string) {
       };
 
       // Stop recording if user stops screen share via browser UI
-      stream.getVideoTracks()[0].addEventListener('ended', () => {
+      displayStream.getVideoTracks()[0].addEventListener('ended', () => {
+        // Also clean up mic stream
+        micStream?.getTracks().forEach((t) => t.stop());
         stopRecording();
       });
 
@@ -111,7 +158,7 @@ function useScreenRecorder(videoName: string) {
     };
   }, []);
 
-  return { isRecording, recordingTime, startRecording, stopRecording };
+  return { isRecording, recordingTime, startRecording, stopRecording, hasAudio };
 }
 
 // ─── Types ──────────────────────────────────────────────────────
@@ -130,11 +177,12 @@ export default function AnalysisDashboard({ results, loading, videoId, video, mo
   const [activeTab, setActiveTab] = useState<Tab>('transcript');
   const [selectedParticipantId, setSelectedParticipantId] = useState<string | null>(null);
   const [exporting, setExporting] = useState<'pdf' | 'csv' | null>(null);
+  const [generatingReport, setGeneratingReport] = useState(false);
   const transcriptRef = useRef<HTMLDivElement>(null);
 
   // Always call hook (React rules) — disabled in review mode
   const { state: rtState, attachVideo } = useRealtimeAnalysis(videoId, mode === 'realtime');
-  const { isRecording, recordingTime, startRecording, stopRecording } = useScreenRecorder(video?.name || 'analysis');
+  const { isRecording, recordingTime, startRecording, stopRecording, hasAudio } = useScreenRecorder(video?.name || 'analysis');
 
   // Auto-scroll transcript to bottom (only if user hasn't scrolled up)
   useEffect(() => {
@@ -150,6 +198,8 @@ export default function AnalysisDashboard({ results, loading, videoId, video, mo
   // ─── URL Viewing Mode ──────────────────────────────────────────
   if (mode === 'url' && video?.source_url) {
     const isStreamingPage = video.source_url.includes('stream.aspx') || video.source_url.includes('embed.aspx');
+    const isDownloading = video.status === 'downloading';
+    const downloadFailed = video.status === 'download_failed' || video.status === 'url';
 
     return (
       <div className="space-y-6">
@@ -158,6 +208,17 @@ export default function AnalysisDashboard({ results, loading, videoId, video, mo
             {video.name || 'Video from URL'}
           </h2>
           <div className="flex items-center gap-3">
+            {isDownloading && (
+              <span className="flex items-center gap-1.5 text-xs font-semibold text-amber-400 bg-amber-400/10 px-3 py-1.5 rounded-full">
+                <Loader2 className="w-3 h-3 animate-spin" />
+                Downloading...
+              </span>
+            )}
+            {downloadFailed && (
+              <span className="flex items-center gap-1.5 text-xs font-semibold text-red-400 bg-red-400/10 px-3 py-1.5 rounded-full">
+                Download Failed
+              </span>
+            )}
             <span className="flex items-center gap-1.5 text-xs font-semibold text-blue-400 bg-blue-400/10 px-3 py-1.5 rounded-full">
               <Link2Icon className="w-3 h-3" />
               URL
@@ -173,7 +234,7 @@ export default function AnalysisDashboard({ results, loading, videoId, video, mo
           </div>
         </div>
 
-        <div className="bg-bg-card border border-border rounded-xl overflow-hidden">
+        <div className="glass-card overflow-hidden">
           {isStreamingPage ? (
             <div className="relative">
               <iframe
@@ -193,30 +254,97 @@ export default function AnalysisDashboard({ results, loading, videoId, video, mo
           )}
         </div>
 
-        <div className="bg-bg-card border border-border rounded-xl p-6 text-center">
-          <div className="flex flex-col items-center gap-3 text-text-muted">
-            <Upload className="w-8 h-8 opacity-40" />
-            <p className="text-sm">For full AI analysis (emotions, engagement, transcription, coaching), upload the video file directly.</p>
-            <p className="text-xs">URL mode provides viewing access only.</p>
+        {isDownloading && (
+          <div className="glass-card p-6 text-center">
+            <div className="flex flex-col items-center gap-3">
+              <Loader2 className="w-8 h-8 text-accent animate-spin" />
+              <p className="text-sm text-text-primary font-medium">Downloading video for analysis...</p>
+              <p className="text-xs text-text-muted">Once downloaded, full AI analysis will start automatically.</p>
+            </div>
           </div>
-        </div>
+        )}
+
+        {downloadFailed && (
+          <div className="glass-card p-6">
+            <div className="flex flex-col items-center gap-4 text-center">
+              <Upload className="w-8 h-8 text-amber-400 opacity-70" />
+              <div>
+                <p className="text-sm text-text-primary font-medium">
+                  Could not download video automatically
+                </p>
+                <p className="text-xs text-text-muted mt-1">
+                  This URL requires authentication (SharePoint/Teams login).
+                  To get full AI analysis, use one of these options:
+                </p>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 w-full max-w-lg">
+                <div className="glass-depth-1 p-4 rounded-xl text-left">
+                  <p className="text-xs font-bold text-accent mb-1">Option 1: Download & Upload</p>
+                  <ol className="text-[11px] text-text-muted space-y-1 list-decimal list-inside">
+                    <li>Open the video link in your browser</li>
+                    <li>Download the recording (usually via &quot;...&quot; menu)</li>
+                    <li>Upload the downloaded file here</li>
+                  </ol>
+                </div>
+                <div className="glass-depth-1 p-4 rounded-xl text-left">
+                  <p className="text-xs font-bold text-accent mb-1">Option 2: Upload Cookies</p>
+                  <ol className="text-[11px] text-text-muted space-y-1 list-decimal list-inside">
+                    <li>Install a cookies.txt browser extension</li>
+                    <li>Export cookies while logged into SharePoint</li>
+                    <li>Upload the cookies.txt file below</li>
+                  </ol>
+                  <label className="mt-2 flex items-center gap-2 px-3 py-1.5 text-xs font-medium text-accent bg-accent/10 rounded-lg cursor-pointer hover:bg-accent/20 transition-colors w-fit">
+                    <Upload className="w-3 h-3" />
+                    Upload cookies.txt
+                    <input
+                      type="file"
+                      accept=".txt"
+                      className="hidden"
+                      onChange={async (e) => {
+                        const file = e.target.files?.[0];
+                        if (!file) return;
+                        const form = new FormData();
+                        form.append('file', file);
+                        try {
+                          await fetch('/api/upload-cookies', { method: 'POST', body: form });
+                          // Retry download
+                          await fetch(`/api/import-url`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ url: video.source_url }),
+                          });
+                          alert('Cookies uploaded! Retrying download...');
+                        } catch {
+                          alert('Failed to upload cookies.');
+                        }
+                      }}
+                    />
+                  </label>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     );
   }
 
   // ─── Realtime Mode ──────────────────────────────────────────────
   if (mode === 'realtime') {
-    const rtParticipants: Participant[] = Array.from(rtState.participants.entries()).map(([label, data]) => ({
-      id: data.id || label,
-      video_id: videoId,
-      name: data.name || label,
-      engagement_score: data.engagement_score || 0,
-      sentiment_score: data.sentiment_score || 0,
-      speaking_pct: data.speaking_pct || 0,
-      clarity_score: data.clarity_score || 0,
-      rapport_score: data.rapport_score || 0,
-      energy_score: data.energy_score || 0,
-    }));
+    // Filter out ghost "Person N" entries that don't have real names
+    const rtParticipants: Participant[] = Array.from(rtState.participants.entries())
+      .filter(([label]) => !label.match(/^Person \d+$/))
+      .map(([label, data]) => ({
+        id: data.id || label,
+        video_id: videoId,
+        name: data.name || label,
+        engagement_score: data.engagement_score || 0,
+        sentiment_score: data.sentiment_score || 0,
+        speaking_pct: data.speaking_pct || 0,
+        clarity_score: data.clarity_score || 0,
+        rapport_score: data.rapport_score || 0,
+        energy_score: data.energy_score || 0,
+      }));
 
     const selectedParticipant = rtParticipants.find((p) => p.id === selectedParticipantId) || null;
 
@@ -234,8 +362,8 @@ export default function AnalysisDashboard({ results, loading, videoId, video, mo
 
     return (
       <div className="space-y-6">
-        {/* Engagement Alerts */}
-        <EngagementAlerts alerts={rtState.engagementAlerts} />
+        {/* Engagement Alerts — hidden for demo (covered by Critical Moments) */}
+        {/* <EngagementAlerts alerts={rtState.engagementAlerts} /> */}
 
         {/* Header */}
         <div className="flex items-center gap-6 flex-wrap">
@@ -247,26 +375,65 @@ export default function AnalysisDashboard({ results, loading, videoId, video, mo
               <Radio className="w-3 h-3 animate-pulse" />
               LIVE
             </span>
+            {/* Generate Report Button — works anytime */}
+            <button
+              onClick={async () => {
+                setGeneratingReport(true);
+                try {
+                  // First generate summary on demand
+                  await fetch(`/api/videos/${videoId}/generate-summary`, { method: 'POST' });
+                  // Then download PDF
+                  const res = await fetch(`/api/videos/${videoId}/export/pdf`);
+                  if (res.ok) {
+                    const blob = await res.blob();
+                    const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+                    a.download = `report_${videoId.slice(0, 8)}.pdf`; a.click();
+                    URL.revokeObjectURL(a.href);
+                  }
+                } catch { /* silent */ } finally { setGeneratingReport(false); }
+              }}
+              disabled={generatingReport}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-accent glass-depth-2 rounded-full transition-colors hover:border-accent/30 disabled:opacity-50"
+            >
+              {generatingReport ? <Loader2 className="w-3 h-3 animate-spin" /> : <FileDown className="w-3 h-3" />}
+              {generatingReport ? 'Generating...' : 'Generate Report'}
+            </button>
             {/* Screen Record Button */}
             {isRecording ? (
-              <button
-                onClick={stopRecording}
-                className="flex items-center gap-2 px-3 py-1.5 text-xs font-semibold text-white bg-red-600 hover:bg-red-700 rounded-full shadow-lg transition-colors"
-              >
-                <Square className="w-3 h-3 fill-current" />
-                Stop {Math.floor(recordingTime / 60)}:{(recordingTime % 60).toString().padStart(2, '0')}
-              </button>
+              <>
+                <button
+                  onClick={stopRecording}
+                  className="flex items-center gap-2 px-3 py-1.5 text-xs font-semibold text-white bg-red-600 hover:bg-red-700 rounded-full shadow-lg transition-colors"
+                >
+                  <Square className="w-3 h-3 fill-current" />
+                  Stop {Math.floor(recordingTime / 60)}:{(recordingTime % 60).toString().padStart(2, '0')}
+                </button>
+                {!hasAudio && (
+                  <span className="text-xs text-amber-400 px-2 py-1 glass-depth-1 rounded-full" title="Screen recording cannot capture system audio on macOS. Use 'Download Video' for audio.">
+                    No audio - use Download Video
+                  </span>
+                )}
+              </>
             ) : (
               <button
                 onClick={startRecording}
-                className="flex items-center gap-2 px-3 py-1.5 text-xs font-semibold text-text-primary bg-bg-card hover:bg-bg-card-hover border border-border rounded-full transition-colors"
-                title="Record screen to Downloads"
+                className="flex items-center gap-2 px-3 py-1.5 text-xs font-semibold text-text-primary glass-depth-2 rounded-full transition-colors"
+                title="Screen recording (select browser tab and check 'Share audio' for audio)"
               >
                 <Circle className="w-3 h-3 text-red-400 fill-red-400" />
                 Record
               </button>
             )}
-            <span className="text-xs text-text-muted bg-bg-card px-3 py-1.5 rounded-full border border-border">
+            <a
+              href={videoSrc}
+              download
+              className="flex items-center gap-2 px-3 py-1.5 text-xs font-semibold text-accent glass-depth-2 rounded-full transition-colors hover:bg-white/10"
+              title="Download original video with audio"
+            >
+              <Download className="w-3 h-3" />
+              Download Video
+            </a>
+            <span className="text-xs text-text-muted glass-depth-1 px-3 py-1.5 rounded-full">
               {rtState.isConnected ? rtState.statusMessage : 'Connecting...'}
             </span>
             {rtParticipants.length > 0 && (
@@ -326,27 +493,31 @@ export default function AnalysisDashboard({ results, loading, videoId, video, mo
 
         {/* Export buttons when analysis is complete */}
         {rtState.isComplete && (
-          <div className="flex items-center gap-3 p-4 bg-bg-card border border-border rounded-xl">
+          <div className="flex items-center gap-3 p-4 glass-card">
             <span className="text-sm text-text-secondary flex-1">Analysis complete. Export your results:</span>
             <button
               onClick={() => {
                 fetch(`/api/videos/${videoId}/export/pdf`).then(r => r.blob()).then(b => {
-                  const a = document.createElement('a'); a.href = URL.createObjectURL(b);
+                  const url = URL.createObjectURL(b);
+                  const a = document.createElement('a'); a.href = url;
                   a.download = `report_${videoId.slice(0, 8)}.pdf`; a.click();
+                  URL.revokeObjectURL(url);
                 });
               }}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-text-primary bg-bg-card-hover border border-border rounded-lg hover:border-accent/50 transition-colors"
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-text-primary glass-depth-2 rounded-lg hover:border-accent/50 transition-colors"
             >
               <Download className="w-3.5 h-3.5" /> PDF Report
             </button>
             <button
               onClick={() => {
                 fetch(`/api/videos/${videoId}/export/csv`).then(r => r.blob()).then(b => {
-                  const a = document.createElement('a'); a.href = URL.createObjectURL(b);
+                  const url = URL.createObjectURL(b);
+                  const a = document.createElement('a'); a.href = url;
                   a.download = `data_${videoId.slice(0, 8)}.zip`; a.click();
+                  URL.revokeObjectURL(url);
                 });
               }}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-text-primary bg-bg-card-hover border border-border rounded-lg hover:border-accent/50 transition-colors"
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-text-primary glass-depth-2 rounded-lg hover:border-accent/50 transition-colors"
             >
               <Download className="w-3.5 h-3.5" /> CSV Data
             </button>
@@ -354,8 +525,8 @@ export default function AnalysisDashboard({ results, loading, videoId, video, mo
         )}
 
         {/* Tabs */}
-        <div className="bg-bg-card border border-border rounded-xl overflow-hidden">
-          <div className="flex border-b border-border">
+        <div className="glass-card overflow-hidden">
+          <div className="flex border-b border-white/[0.08]">
             {tabs.map((tab) => (
               <button
                 key={tab.key}
@@ -364,7 +535,7 @@ export default function AnalysisDashboard({ results, loading, videoId, video, mo
                   flex items-center gap-2 px-6 py-4 text-sm font-medium transition-colors border-b-2
                   ${activeTab === tab.key
                     ? 'text-accent border-accent bg-accent/5'
-                    : 'text-text-muted border-transparent hover:text-text-secondary hover:bg-bg-card-hover'
+                    : 'text-text-muted border-transparent hover:text-text-secondary'
                   }
                 `}
               >
@@ -448,7 +619,7 @@ export default function AnalysisDashboard({ results, loading, videoId, video, mo
                       <h4 className="text-sm font-bold text-accent mb-3">{participant}</h4>
                       <div className="space-y-3">
                         {items.map((item, i) => (
-                          <div key={i} className="flex items-start gap-3 p-4 bg-bg-primary/50 border border-border rounded-lg">
+                          <div key={i} className="flex items-start gap-3 p-4 glass-depth-1">
                             <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0 bg-accent/10">
                               <Lightbulb className="w-4 h-4 text-accent" />
                             </div>
@@ -478,7 +649,7 @@ export default function AnalysisDashboard({ results, loading, videoId, video, mo
             {activeTab === 'insights' && (
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                 {rtParticipants.map((p) => (
-                  <div key={p.id} className="p-4 bg-bg-primary/50 border border-border rounded-lg">
+                  <div key={p.id} className="p-4 glass-depth-1">
                     <p className="text-sm font-medium text-text-primary mb-3">{p.name}</p>
                     <div className="space-y-2">
                       {[
@@ -490,7 +661,7 @@ export default function AnalysisDashboard({ results, loading, videoId, video, mo
                         <div key={metric.label} className="flex items-center justify-between">
                           <span className="text-xs text-text-muted">{metric.label}</span>
                           <div className="flex items-center gap-2">
-                            <div className="w-20 h-1.5 bg-bg-secondary rounded-full overflow-hidden">
+                            <div className="w-20 h-1.5 glass-depth-1 rounded-full overflow-hidden">
                               <div
                                 className="h-full rounded-full transition-all duration-700"
                                 style={{
@@ -597,7 +768,7 @@ export default function AnalysisDashboard({ results, loading, videoId, video, mo
             <button
               onClick={() => handleExport('pdf')}
               disabled={exporting !== null}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-text-primary bg-bg-card hover:bg-bg-card-hover border border-border rounded-lg transition-colors disabled:opacity-50"
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-text-primary glass-depth-2 rounded-lg transition-colors disabled:opacity-50 hover:border-accent/30"
             >
               {exporting === 'pdf' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Download className="w-3.5 h-3.5" />}
               PDF Report
@@ -605,7 +776,7 @@ export default function AnalysisDashboard({ results, loading, videoId, video, mo
             <button
               onClick={() => handleExport('csv')}
               disabled={exporting !== null}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-text-primary bg-bg-card hover:bg-bg-card-hover border border-border rounded-lg transition-colors disabled:opacity-50"
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-text-primary glass-depth-2 rounded-lg transition-colors disabled:opacity-50 hover:border-accent/30"
             >
               {exporting === 'csv' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Download className="w-3.5 h-3.5" />}
               CSV Data
@@ -616,7 +787,7 @@ export default function AnalysisDashboard({ results, loading, videoId, video, mo
 
       <div className="grid grid-cols-12 gap-6">
         <div className="col-span-12 lg:col-span-8 space-y-6">
-          <div className="bg-bg-card border border-border rounded-xl overflow-hidden">
+          <div className="glass-card overflow-hidden">
             <video controls className="w-full aspect-video bg-black" src={`/uploads/${vid.id}_${vid.filename}`} />
           </div>
           <EmotionTimeline emotions={emotions} participants={participants} />
@@ -629,8 +800,8 @@ export default function AnalysisDashboard({ results, loading, videoId, video, mo
         </div>
       </div>
 
-      <div className="bg-bg-card border border-border rounded-xl overflow-hidden">
-        <div className="flex border-b border-border">
+      <div className="glass-card overflow-hidden">
+        <div className="flex border-b border-white/[0.08]">
           {tabs.map((tab) => (
             <button
               key={tab.key}
@@ -638,7 +809,7 @@ export default function AnalysisDashboard({ results, loading, videoId, video, mo
               className={`flex items-center gap-2 px-6 py-4 text-sm font-medium transition-colors border-b-2 ${
                 activeTab === tab.key
                   ? 'text-accent border-accent bg-accent/5'
-                  : 'text-text-muted border-transparent hover:text-text-secondary hover:bg-bg-card-hover'
+                  : 'text-text-muted border-transparent hover:text-text-secondary'
               }`}
             >
               {tab.icon}
@@ -687,7 +858,7 @@ export default function AnalysisDashboard({ results, loading, videoId, video, mo
           {activeTab === 'insights' && (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
               {participants.map((p) => (
-                <div key={p.id} className="p-4 bg-bg-primary/50 border border-border rounded-lg">
+                <div key={p.id} className="p-4 glass-depth-1">
                   <p className="text-sm font-medium text-text-primary mb-3">{p.name}</p>
                   <div className="space-y-2">
                     {[
@@ -699,7 +870,7 @@ export default function AnalysisDashboard({ results, loading, videoId, video, mo
                       <div key={m.label} className="flex items-center justify-between">
                         <span className="text-xs text-text-muted">{m.label}</span>
                         <div className="flex items-center gap-2">
-                          <div className="w-20 h-1.5 bg-bg-secondary rounded-full overflow-hidden">
+                          <div className="w-20 h-1.5 glass-depth-1 rounded-full overflow-hidden">
                             <div className="h-full rounded-full" style={{ width: `${m.value}%`, backgroundColor: m.value >= 80 ? '#10b981' : m.value >= 60 ? '#3b82f6' : m.value >= 40 ? '#f59e0b' : '#ef4444' }} />
                           </div>
                           <span className="text-xs font-bold text-text-secondary tabular-nums w-8 text-right">{Math.round(m.value)}</span>
@@ -744,7 +915,7 @@ function RealtimePlayer({ videoSrc, attachVideo, rtState }: {
   }, [attachVideo]);
 
   return (
-    <div className="bg-bg-card border border-border rounded-xl overflow-hidden relative group">
+    <div className="glass-card overflow-hidden relative group">
       <video ref={videoRef} controls className="w-full aspect-video bg-black" src={videoSrc} />
       <CaptionOverlay
         transcript={rtState.transcript}

@@ -112,18 +112,34 @@ async def run_analysis_pipeline(video_id: str, file_path: str):
                 pid = str(uuid.uuid4())
                 name = ps.get("name", "Unknown")
                 participant_id_map[name] = pid
+                speak = ps.get("speaking_pct", 25)
+                raw_eng = ps.get("engagement", 70)
+                raw_sent = max(0, min(100, (ps.get("sentiment", 0.3) + 1) * 50))
+                raw_clar = ps.get("clarity", 70)
+                raw_rap = ps.get("rapport", 70)
+                raw_ener = ps.get("energy", 70)
+
+                if speak < 1.0:
+                    raw_eng = min(raw_eng, 15)
+                    raw_sent = 50
+                    raw_clar = min(raw_clar, 15)
+                    raw_rap = min(raw_rap, 15)
+                    raw_ener = min(raw_ener, 15)
+                elif speak < 5.0:
+                    cap = 30 + speak * 4
+                    raw_eng = min(raw_eng, cap)
+                    raw_clar = min(raw_clar, cap)
+                    raw_rap = min(raw_rap, cap)
+                    raw_ener = min(raw_ener, cap)
+
                 await db.execute(
                     """INSERT INTO participants (id, video_id, name, engagement_score,
                        sentiment_score, speaking_pct, clarity_score, rapport_score, energy_score)
                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (
                         pid, video_id, name,
-                        ps.get("engagement", 70),
-                        ps.get("sentiment", 0.3),
-                        ps.get("speaking_pct", 25),
-                        ps.get("clarity", 70),
-                        ps.get("rapport", 70),
-                        ps.get("energy", 70),
+                        raw_eng, raw_sent, speak,
+                        raw_clar, raw_rap, raw_ener,
                     ),
                 )
 

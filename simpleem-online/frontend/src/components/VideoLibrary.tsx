@@ -76,7 +76,7 @@ export default function VideoLibrary({ videos, onSelect, onDelete }: Props) {
           <div
             key={video.id}
             onClick={() => onSelect(video.id)}
-            className="bg-bg-card border border-border rounded-xl p-5 hover:bg-bg-card-hover hover:border-accent/30 transition-all cursor-pointer group"
+            className="glass-card p-5 glass-card-hover hover:border-accent/30 transition-all cursor-pointer group"
           >
             <div className="flex items-start justify-between mb-3">
               <div className="flex items-center gap-3">

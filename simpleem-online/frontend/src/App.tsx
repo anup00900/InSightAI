@@ -58,30 +58,8 @@ function App() {
       const { id } = await importVideoUrl(url);
       await fetchVideos();
 
-      // Poll until download completes (status changes from "downloading")
-      const poll = async () => {
-        for (let i = 0; i < 60; i++) { // up to 2 minutes
-          await new Promise(r => setTimeout(r, 2000));
-          try {
-            const v = await getVideo(id);
-            await fetchVideos();
-            if (v.status === 'ready') {
-              // Download succeeded — open in realtime analysis mode
-              handleSelectVideo(id);
-              return;
-            }
-            if (v.status === 'url') {
-              // Download failed — open in URL view mode
-              handleSelectVideo(id);
-              return;
-            }
-            // Still downloading...
-          } catch { break; }
-        }
-        // Timed out — just open whatever we have
-        handleSelectVideo(id);
-      };
-      poll();
+      // Open immediately in URL mode (shows downloading state)
+      handleSelectVideo(id);
     } catch (err) {
       console.error('URL import failed:', err);
       setUploadError('Failed to import URL. Please check the link and try again.');
@@ -95,8 +73,31 @@ function App() {
       const video = await getVideo(videoId);
       setSelectedVideo(video);
 
-      if (video.status === 'url') {
-        // URL viewing mode — embedded player, no analysis
+      if (video.status === 'downloading') {
+        // Still downloading — show URL mode with loading indicator, poll for ready
+        setResults(null);
+        setDashboardMode('url');
+        setView('dashboard');
+        // Poll until download completes
+        const poll = async () => {
+          for (let i = 0; i < 90; i++) {
+            await new Promise(r => setTimeout(r, 2000));
+            try {
+              const v = await getVideo(videoId);
+              setSelectedVideo(v);
+              if (v.status === 'ready') {
+                setDashboardMode('realtime');
+                return;
+              }
+              if (v.status === 'download_failed' || v.status === 'url') {
+                return; // Stay in URL mode, show error
+              }
+            } catch { break; }
+          }
+        };
+        poll();
+      } else if (video.status === 'url' || video.status === 'download_failed') {
+        // Download failed — show URL mode with retry options
         setResults(null);
         setDashboardMode('url');
       } else if (video.status === 'complete') {
@@ -104,7 +105,7 @@ function App() {
         setResults(data);
         setDashboardMode('review');
       } else {
-        // Realtime mode — video is ready for live analysis
+        // "ready" or other — realtime mode (same as file upload)
         setResults(null);
         setDashboardMode('realtime');
       }
@@ -136,14 +137,14 @@ function App() {
   return (
     <div className="min-h-screen bg-bg-primary">
       {/* Header */}
-      <header className="border-b border-border bg-bg-secondary/80 backdrop-blur-sm sticky top-0 z-50">
+      <header className="border-b border-white/[0.06] glass-card sticky top-0 z-50" style={{ borderRadius: 0 }}>
         <div className="max-w-[1600px] mx-auto px-6 py-4 flex items-center justify-between">
           <div className="flex items-center gap-3 cursor-pointer" onClick={handleBack}>
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-accent to-blue-400 flex items-center justify-center shadow-lg shadow-accent-glow">
+            <div className="w-10 h-10 rounded-xl bg-gradient-primary flex items-center justify-center shadow-lg shadow-glow-blue">
               <Activity className="w-5 h-5 text-white" />
             </div>
             <div>
-              <h1 className="text-lg font-bold text-text-primary tracking-tight">
+              <h1 className="text-lg font-bold gradient-text tracking-tight">
                 InsightAI
               </h1>
               <p className="text-[11px] text-text-muted">Real-time Conversation Intelligence</p>
@@ -152,7 +153,7 @@ function App() {
           {view === 'dashboard' && (
             <button
               onClick={handleBack}
-              className="flex items-center gap-2 px-4 py-2 text-sm text-text-secondary hover:text-text-primary border border-border rounded-lg hover:bg-bg-card transition-colors"
+              className="flex items-center gap-2 px-4 py-2 text-sm text-text-secondary hover:text-text-primary glass-depth-2 rounded-lg transition-colors"
             >
               <ArrowLeft className="w-4 h-4" />
               Library

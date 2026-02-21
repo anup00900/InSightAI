@@ -39,7 +39,7 @@ export default function EmotionsSignal({ signals }: Props) {
               >
                 {p.emotions.primary}
               </span>
-              <div className="w-12 h-1.5 bg-bg-secondary rounded-full overflow-hidden">
+              <div className="w-12 h-1.5 glass-depth-1 rounded-full overflow-hidden">
                 <div
                   className="h-full rounded-full transition-all duration-500"
                   style={{

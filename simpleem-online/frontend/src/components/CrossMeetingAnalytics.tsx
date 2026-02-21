@@ -174,7 +174,7 @@ export default function CrossMeetingAnalytics() {
           </div>
 
           {comparisonData && (
-            <div className="bg-bg-card border border-border rounded-xl p-6">
+            <div className="glass-card p-6">
               <h3 className="text-xl font-bold text-text-primary mb-6">
                 Meeting Comparison
               </h3>

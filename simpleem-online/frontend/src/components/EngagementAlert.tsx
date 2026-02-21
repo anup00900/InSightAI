@@ -10,24 +10,30 @@ interface Props {
 export default function EngagementAlerts({ alerts }: Props) {
   const [dismissed, setDismissed] = useState<Set<number>>(new Set());
 
-  // Auto-dismiss after 10 seconds
+  // Auto-dismiss after 8 seconds
   useEffect(() => {
     if (alerts.length === 0) return;
     const timer = setTimeout(() => {
       setDismissed(new Set(alerts.map((_, i) => i)));
-    }, 10000);
+    }, 8000);
     return () => clearTimeout(timer);
   }, [alerts.length]);
 
-  const visible = alerts.filter((_, i) => !dismissed.has(i));
+  // Only show latest 2 non-dismissed alerts (skip "Person N" ghost alerts)
+  const visible = alerts
+    .map((alert, i) => ({ alert, i }))
+    .filter(({ alert, i }) => !dismissed.has(i) && !alert.participant.match(/^Person \d+$/))
+    .slice(-2);
+
   if (visible.length === 0) return null;
 
   return (
     <div className="fixed top-20 right-6 z-50 space-y-2 max-w-sm">
-      {visible.map((alert, i) => (
+      {visible.map(({ alert, i }) => (
         <div
           key={`${alert.timestamp}-${i}`}
-          className="bg-red-900/90 border border-red-500/50 rounded-xl p-4 shadow-2xl animate-fade-in backdrop-blur-sm"
+          className="glass-card p-4 border-red-500/30 shadow-2xl animate-fade-in"
+          style={{ background: 'rgba(127,29,29,0.6)' }}
         >
           <div className="flex items-start gap-3">
             <AlertTriangle className="w-5 h-5 text-red-400 shrink-0 mt-0.5" />
@@ -44,7 +50,7 @@ export default function EngagementAlerts({ alerts }: Props) {
               </p>
             </div>
             <button
-              onClick={() => setDismissed(new Set([...dismissed, alerts.indexOf(alert)]))}
+              onClick={() => setDismissed(new Set([...dismissed, i]))}
               className="text-red-400 hover:text-red-200"
             >
               <X className="w-4 h-4" />

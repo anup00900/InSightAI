@@ -5,7 +5,51 @@ pauses, spectral brightness. Contributes 38% to holistic engagement score.
 """
 
 import logging
+import sys
+import types
 from dataclasses import dataclass
+
+# Stub _lzma if Python was built without liblzma —
+# pooch (librosa dependency) imports lzma at module level but we never decompress .xz files.
+try:
+    import _lzma  # noqa: F401
+except (ModuleNotFoundError, ImportError):
+    _stub = types.ModuleType("_lzma")
+    # lzma.py expects these names from the C extension
+    _stub._encode_filter_properties = None  # type: ignore[attr-defined]
+    _stub._decode_filter_properties = None  # type: ignore[attr-defined]
+    _stub.FORMAT_AUTO = 0  # type: ignore[attr-defined]
+    _stub.FORMAT_XZ = 1  # type: ignore[attr-defined]
+    _stub.FORMAT_ALONE = 2  # type: ignore[attr-defined]
+    _stub.FORMAT_RAW = 3  # type: ignore[attr-defined]
+    _stub.CHECK_NONE = 0  # type: ignore[attr-defined]
+    _stub.CHECK_CRC32 = 1  # type: ignore[attr-defined]
+    _stub.CHECK_CRC64 = 4  # type: ignore[attr-defined]
+    _stub.CHECK_SHA256 = 10  # type: ignore[attr-defined]
+    _stub.CHECK_ID_MAX = 15  # type: ignore[attr-defined]
+    _stub.CHECK_UNKNOWN = 16  # type: ignore[attr-defined]
+    _stub.MF_HC3 = 0x03  # type: ignore[attr-defined]
+    _stub.MF_HC4 = 0x04  # type: ignore[attr-defined]
+    _stub.MF_BT2 = 0x12  # type: ignore[attr-defined]
+    _stub.MF_BT3 = 0x13  # type: ignore[attr-defined]
+    _stub.MF_BT4 = 0x14  # type: ignore[attr-defined]
+    _stub.MODE_FAST = 1  # type: ignore[attr-defined]
+    _stub.MODE_NORMAL = 2  # type: ignore[attr-defined]
+    _stub.PRESET_DEFAULT = 6  # type: ignore[attr-defined]
+    _stub.PRESET_EXTREME = 0  # type: ignore[attr-defined]
+
+    class _StubCompressor:
+        def compress(self, data): raise RuntimeError("lzma not available")
+        def flush(self): return b""
+    class _StubDecompressor:
+        eof = True
+        needs_input = False
+        unused_data = b""
+        def decompress(self, data, max_length=-1): raise RuntimeError("lzma not available")
+    _stub.LZMACompressor = _StubCompressor  # type: ignore[attr-defined]
+    _stub.LZMADecompressor = _StubDecompressor  # type: ignore[attr-defined]
+    _stub.LZMAError = type("LZMAError", (Exception,), {})  # type: ignore[attr-defined]
+    sys.modules["_lzma"] = _stub
 
 import librosa
 import numpy as np

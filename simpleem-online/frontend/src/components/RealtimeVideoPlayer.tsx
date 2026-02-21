@@ -20,12 +20,19 @@ export default function RealtimeVideoPlayer({
 
   useEffect(() => {
     if (!videoRef.current) return;
-    const cleanup = attachVideo(videoRef.current);
-    return cleanup;
+    const el = videoRef.current;
+    const cleanup = attachVideo(el);
+    return () => {
+      cleanup();
+      // Release media decode buffers on unmount
+      el.pause();
+      el.removeAttribute('src');
+      el.load();
+    };
   }, [attachVideo]);
 
   return (
-    <div className="bg-bg-card border border-border rounded-xl overflow-hidden relative group">
+    <div className="glass-card overflow-hidden relative group">
       <video
         ref={videoRef}
         controls

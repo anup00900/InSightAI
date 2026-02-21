@@ -16,7 +16,7 @@ export default function SignalWeightCard({ visualScore, audioScore, verbalScore 
   const verbalFill = verbalScore / 100;
 
   return (
-    <div className="bg-bg-card border border-border rounded-xl p-4">
+    <div className="glass-card p-4">
       {/* Header */}
       <div className="mb-4">
         <h3 className="text-text-primary font-semibold text-lg">Signal Weights</h3>

@@ -30,7 +30,7 @@ def _load_pipeline():
         from pyannote.audio import Pipeline
         pipeline = Pipeline.from_pretrained(
             "pyannote/speaker-diarization-3.1",
-            use_auth_token=HUGGINGFACE_TOKEN,
+            token=HUGGINGFACE_TOKEN or None,
         )
         logger.info("pyannote diarization pipeline loaded")
         return pipeline
@@ -51,9 +51,11 @@ async def diarize_audio(audio_path: str) -> List[DiarizationSegment]:
         return []
 
     def _run():
-        diarization = pipeline(audio_path)
+        result = pipeline(audio_path)
+        # pyannote 4.x returns DiarizeOutput; extract the Annotation object
+        annotation = getattr(result, "speaker_diarization", result)
         segments = []
-        for turn, _, speaker in diarization.itertracks(yield_label=True):
+        for turn, _, speaker in annotation.itertracks(yield_label=True):
             segments.append(DiarizationSegment(
                 start=turn.start,
                 end=turn.end,

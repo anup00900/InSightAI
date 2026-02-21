@@ -40,7 +40,7 @@ export default function EmotionTimeline({ emotions, participants, isRealtime = f
   // In realtime mode, always show the chart container (even empty with loading state)
   if (chartData.length === 0) {
     return (
-      <div className="bg-bg-card border border-border rounded-xl p-6">
+      <div className="glass-card p-6">
         <div className="flex items-center justify-between mb-4">
           <h3 className="text-sm font-semibold text-text-secondary uppercase tracking-wider">
             Engagement Flow
@@ -78,7 +78,7 @@ export default function EmotionTimeline({ emotions, participants, isRealtime = f
   }
 
   return (
-    <div className="bg-bg-card border border-border rounded-xl p-6">
+    <div className="glass-card p-6">
       <div className="flex items-center justify-between mb-4">
         <div className="flex items-center gap-4">
           <h3 className="text-sm font-semibold text-text-secondary uppercase tracking-wider">

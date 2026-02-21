@@ -54,20 +54,20 @@ export default function CoachingPanel({ videoId, participants }: Props) {
       <div className="relative mb-4" ref={dropdownRef}>
         <button
           onClick={() => setDropdownOpen(!dropdownOpen)}
-          className="flex items-center gap-2 px-4 py-2 bg-bg-card border border-border rounded-lg text-sm text-text-primary hover:bg-bg-card-hover transition-colors"
+          className="flex items-center gap-2 px-4 py-2 glass-card text-sm text-text-primary glass-card-hover transition-colors"
         >
           {selectedName}
           <ChevronDown className="w-4 h-4 text-text-muted" />
         </button>
         {dropdownOpen && (
-          <div className="absolute top-full left-0 mt-1 bg-bg-card border border-border rounded-lg shadow-xl z-10 min-w-[200px]">
+          <div className="absolute top-full left-0 mt-1 glass-card shadow-xl z-10 min-w-[200px]">
             {participants.map((p) => (
               <button
                 key={p.id}
                 onClick={() => { setSelectedPid(p.id); setDropdownOpen(false); }}
                 className={`
                   w-full text-left px-4 py-2.5 text-sm transition-colors
-                  ${p.id === selectedPid ? 'text-accent bg-accent/10' : 'text-text-primary hover:bg-bg-card-hover'}
+                  ${p.id === selectedPid ? 'text-accent bg-accent/10' : 'text-text-primary glass-card-hover'}
                 `}
               >
                 {p.name}
@@ -87,7 +87,7 @@ export default function CoachingPanel({ videoId, participants }: Props) {
           {items.map((item) => (
             <div
               key={item.id}
-              className="flex items-start gap-3 p-4 bg-bg-primary/50 border border-border rounded-lg"
+              className="flex items-start gap-3 p-4 glass-depth-1"
             >
               <div
                 className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0"
