@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { type Video, type AnalysisResults, type Participant, formatTime } from '../lib/api';
 import { useRealtimeAnalysis } from '../hooks/useRealtimeAnalysis';
 import EmotionTimeline from './EmotionTimeline';
@@ -15,151 +15,13 @@ import VoiceSignal from './signals/VoiceSignal';
 import WordsSignal from './signals/WordsSignal';
 import PersonalitySignal from './signals/PersonalitySignal';
 import CorrelationPanel from './signals/CorrelationPanel';
-import EngagementAlerts from './EngagementAlert';
 import CaptionOverlay from './CaptionOverlay';
 import SignalWeightCard from './SignalWeightCard';
 import {
   Loader2, Clock, Users, TrendingUp,
   FileText, Lightbulb, MessageSquare, BarChart3, Radio, Link2 as Link2Icon, Upload,
-  Circle, Square, Download, FileDown,
+  Download, FileDown,
 } from 'lucide-react';
-
-// ─── Screen Recording Hook ──────────────────────────────────────
-
-function useScreenRecorder(videoName: string) {
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const chunksRef = useRef<Blob[]>([]);
-  const streamRef = useRef<MediaStream | null>(null);
-  const [isRecording, setIsRecording] = useState(false);
-  const [recordingTime, setRecordingTime] = useState(0);
-  const [hasAudio, setHasAudio] = useState(true);
-  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
-  const startRecording = useCallback(async () => {
-    try {
-      // Capture screen — request tab audio (Chrome supports this for browser tabs)
-      const displayStream = await navigator.mediaDevices.getDisplayMedia({
-        video: { displaySurface: 'browser' } as MediaTrackConstraints,
-        audio: {
-          echoCancellation: false,
-          noiseSuppression: false,
-          autoGainControl: false,
-        } as MediaTrackConstraints,
-      });
-
-      // Also capture microphone audio as fallback (system audio often missing on macOS)
-      let micStream: MediaStream | null = null;
-      try {
-        micStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-      } catch {
-        console.warn('Microphone access denied — recording without mic audio');
-      }
-
-      // Merge audio tracks: system audio + microphone
-      const audioTracks = [
-        ...displayStream.getAudioTracks(),
-        ...(micStream?.getAudioTracks() || []),
-      ];
-
-      let stream: MediaStream;
-      if (audioTracks.length > 0) {
-        setHasAudio(true);
-        // Mix audio tracks using AudioContext
-        try {
-          const audioCtx = new AudioContext();
-          const dest = audioCtx.createMediaStreamDestination();
-          for (const track of audioTracks) {
-            const source = audioCtx.createMediaStreamSource(new MediaStream([track]));
-            source.connect(dest);
-          }
-          stream = new MediaStream([
-            ...displayStream.getVideoTracks(),
-            ...dest.stream.getAudioTracks(),
-          ]);
-        } catch {
-          // Fallback: use display stream as-is
-          stream = displayStream;
-        }
-      } else {
-        setHasAudio(false);
-        stream = displayStream;
-      }
-
-      streamRef.current = stream;
-      chunksRef.current = [];
-
-      const recorder = new MediaRecorder(stream, {
-        mimeType: MediaRecorder.isTypeSupported('video/webm;codecs=vp9,opus')
-          ? 'video/webm;codecs=vp9,opus'
-          : 'video/webm',
-      });
-
-      recorder.ondataavailable = (e) => {
-        if (e.data.size > 0) chunksRef.current.push(e.data);
-      };
-
-      recorder.onstop = () => {
-        const blob = new Blob(chunksRef.current, { type: 'video/webm' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        const safeName = videoName.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 50);
-        a.href = url;
-        a.download = `${safeName}_recording_${new Date().toISOString().slice(0, 19).replace(/:/g, '-')}.webm`;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
-        chunksRef.current = [];
-      };
-
-      // Stop recording if user stops screen share via browser UI
-      displayStream.getVideoTracks()[0].addEventListener('ended', () => {
-        // Also clean up mic stream
-        micStream?.getTracks().forEach((t) => t.stop());
-        stopRecording();
-      });
-
-      recorder.start(1000); // Collect data every 1s
-      mediaRecorderRef.current = recorder;
-      setIsRecording(true);
-      setRecordingTime(0);
-      timerRef.current = setInterval(() => setRecordingTime((t) => t + 1), 1000);
-    } catch (err) {
-      console.warn('Screen recording cancelled or failed:', err);
-    }
-  }, [videoName]);
-
-  const stopRecording = useCallback(() => {
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-      mediaRecorderRef.current.stop();
-    }
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach((t) => t.stop());
-      streamRef.current = null;
-    }
-    if (timerRef.current) {
-      clearInterval(timerRef.current);
-      timerRef.current = null;
-    }
-    setIsRecording(false);
-    setRecordingTime(0);
-  }, []);
-
-  // Cleanup on unmount
-  useEffect(() => {
-    return () => {
-      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-        mediaRecorderRef.current.stop();
-      }
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach((t) => t.stop());
-      }
-      if (timerRef.current) clearInterval(timerRef.current);
-    };
-  }, []);
-
-  return { isRecording, recordingTime, startRecording, stopRecording, hasAudio };
-}
 
 // ─── Types ──────────────────────────────────────────────────────
 
@@ -182,7 +44,6 @@ export default function AnalysisDashboard({ results, loading, videoId, video, mo
 
   // Always call hook (React rules) — disabled in review mode
   const { state: rtState, attachVideo } = useRealtimeAnalysis(videoId, mode === 'realtime');
-  const { isRecording, recordingTime, startRecording, stopRecording, hasAudio } = useScreenRecorder(video?.name || 'analysis');
 
   // Auto-scroll transcript to bottom (only if user hasn't scrolled up)
   useEffect(() => {
@@ -398,32 +259,6 @@ export default function AnalysisDashboard({ results, loading, videoId, video, mo
               {generatingReport ? <Loader2 className="w-3 h-3 animate-spin" /> : <FileDown className="w-3 h-3" />}
               {generatingReport ? 'Generating...' : 'Generate Report'}
             </button>
-            {/* Screen Record Button */}
-            {isRecording ? (
-              <>
-                <button
-                  onClick={stopRecording}
-                  className="flex items-center gap-2 px-3 py-1.5 text-xs font-semibold text-white bg-red-600 hover:bg-red-700 rounded-full shadow-lg transition-colors"
-                >
-                  <Square className="w-3 h-3 fill-current" />
-                  Stop {Math.floor(recordingTime / 60)}:{(recordingTime % 60).toString().padStart(2, '0')}
-                </button>
-                {!hasAudio && (
-                  <span className="text-xs text-amber-400 px-2 py-1 glass-depth-1 rounded-full" title="Screen recording cannot capture system audio on macOS. Use 'Download Video' for audio.">
-                    No audio - use Download Video
-                  </span>
-                )}
-              </>
-            ) : (
-              <button
-                onClick={startRecording}
-                className="flex items-center gap-2 px-3 py-1.5 text-xs font-semibold text-text-primary glass-depth-2 rounded-full transition-colors"
-                title="Screen recording (select browser tab and check 'Share audio' for audio)"
-              >
-                <Circle className="w-3 h-3 text-red-400 fill-red-400" />
-                Record
-              </button>
-            )}
             <a
               href={videoSrc}
               download

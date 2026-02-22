@@ -4,7 +4,8 @@ import VideoUpload from './components/VideoUpload';
 import VideoLibrary from './components/VideoLibrary';
 import AnalysisDashboard from './components/AnalysisDashboard';
 import CrossMeetingAnalytics from './components/CrossMeetingAnalytics';
-import { Activity, ArrowLeft } from 'lucide-react';
+import { Activity, ArrowLeft, Circle, Square } from 'lucide-react';
+import { useScreenRecorder } from './hooks/useScreenRecorder';
 
 type View = 'library' | 'dashboard';
 type DashboardMode = 'realtime' | 'review' | 'url';
@@ -20,6 +21,7 @@ function App() {
   const [uploadProgress, setUploadProgress] = useState(0);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [dashboardMode, setDashboardMode] = useState<DashboardMode>('review');
+  const { isRecording, recordingTime, startRecording, stopRecording } = useScreenRecorder('InsightAI');
 
   const fetchVideos = useCallback(async () => {
     try {
@@ -150,15 +152,35 @@ function App() {
               <p className="text-[11px] text-text-muted">Real-time Conversation Intelligence</p>
             </div>
           </div>
-          {view === 'dashboard' && (
-            <button
-              onClick={handleBack}
-              className="flex items-center gap-2 px-4 py-2 text-sm text-text-secondary hover:text-text-primary glass-depth-2 rounded-lg transition-colors"
-            >
-              <ArrowLeft className="w-4 h-4" />
-              Library
-            </button>
-          )}
+          <div className="flex items-center gap-3">
+            {isRecording ? (
+              <button
+                onClick={stopRecording}
+                className="flex items-center gap-2 px-4 py-2 text-sm font-semibold text-white bg-red-600 hover:bg-red-700 rounded-lg shadow-lg shadow-red-600/30 transition-colors animate-pulse"
+              >
+                <Square className="w-3.5 h-3.5 fill-current" />
+                Stop {Math.floor(recordingTime / 60)}:{(recordingTime % 60).toString().padStart(2, '0')}
+              </button>
+            ) : (
+              <button
+                onClick={startRecording}
+                className="flex items-center gap-2 px-4 py-2 text-sm text-text-secondary hover:text-text-primary glass-depth-2 rounded-lg transition-colors"
+                title="Record your screen with audio — share this browser tab"
+              >
+                <Circle className="w-3.5 h-3.5 text-red-400 fill-red-400" />
+                Record
+              </button>
+            )}
+            {view === 'dashboard' && (
+              <button
+                onClick={handleBack}
+                className="flex items-center gap-2 px-4 py-2 text-sm text-text-secondary hover:text-text-primary glass-depth-2 rounded-lg transition-colors"
+              >
+                <ArrowLeft className="w-4 h-4" />
+                Library
+              </button>
+            )}
+          </div>
         </div>
       </header>
 
