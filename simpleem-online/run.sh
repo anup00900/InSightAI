@@ -1,5 +1,5 @@
 #!/bin/bash
-# InsightAI - Conversation Intelligence POC
+# LensAI - Conversation Intelligence POC
 # Starts both backend (FastAPI) and frontend (Vite dev server)
 
 set -e
@@ -7,7 +7,7 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 echo "=================================="
-echo "  InsightAI - Conversation Intelligence POC"
+echo "  LensAI - Conversation Intelligence POC"
 echo "=================================="
 echo ""
 

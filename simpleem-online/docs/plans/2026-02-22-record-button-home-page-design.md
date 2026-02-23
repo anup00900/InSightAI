@@ -5,7 +5,7 @@
 
 ## Problem
 
-The Record button is hidden inside `AnalysisDashboard` (only visible in realtime mode after uploading a video). Users need a prominent Record button on the home/landing page to capture the InsightAI dashboard experience with full audio for demos.
+The Record button is hidden inside `AnalysisDashboard` (only visible in realtime mode after uploading a video). Users need a prominent Record button on the home/landing page to capture the LensAI dashboard experience with full audio for demos.
 
 The existing `useScreenRecorder` hook already handles tab audio capture (`getDisplayMedia({ audio: true })`) + microphone (`getUserMedia`), and mixes them via `AudioContext`. The main issues are accessibility (button location) and discoverability.
 
@@ -24,8 +24,8 @@ The existing `useScreenRecorder` hook already handles tab audio capture (`getDis
 - Red circle icon when idle, pulsing animation when recording
 - Timer display showing `MM:SS` while recording
 - Stop button to end recording (triggers `.webm` download)
-- Helper text: "Records your screen with audio — share the InsightAI tab"
-- Uses the extracted `useScreenRecorder` hook with name `"InsightAI_Recording"`
+- Helper text: "Records your screen with audio — share the LensAI tab"
+- Uses the extracted `useScreenRecorder` hook with name `"LensAI_Recording"`
 
 ### 3. Keep existing Record button in AnalysisDashboard
 

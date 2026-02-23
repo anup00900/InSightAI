@@ -21,7 +21,7 @@ function App() {
   const [uploadProgress, setUploadProgress] = useState(0);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [dashboardMode, setDashboardMode] = useState<DashboardMode>('review');
-  const { isRecording, recordingTime, startRecording, stopRecording } = useScreenRecorder('InsightAI');
+  const { isRecording, recordingTime, startRecording, stopRecording } = useScreenRecorder('LensAI');
 
   const fetchVideos = useCallback(async () => {
     try {
@@ -147,7 +147,7 @@ function App() {
             </div>
             <div>
               <h1 className="text-lg font-bold gradient-text tracking-tight">
-                InsightAI
+                LensAI
               </h1>
               <p className="text-[11px] text-text-muted">Real-time Conversation Intelligence</p>
             </div>

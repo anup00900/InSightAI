@@ -1,4 +1,4 @@
-# InSightAI - Conversation Intelligence Platform
+# LensAI - Conversation Intelligence Platform
 
 Real-time meeting analysis platform that extracts behavioral signals, engagement metrics, and actionable coaching from video recordings.
 
@@ -63,8 +63,8 @@ Backend (FastAPI + Python)
 
 ```bash
 # Clone
-git clone https://github.com/anup00900/InSightAI.git
-cd InSightAI
+git clone https://github.com/anup00900/LensAI.git
+cd LensAI
 
 # Create .env
 echo "OPENAI_API_KEY=sk-your-key-here" > .env

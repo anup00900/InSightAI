@@ -1,7 +1,7 @@
-# InsightAI v2 — Simpleem-Grade Conversation Intelligence
+# LensAI v2 — Simpleem-Grade Conversation Intelligence
 
 **Date:** 2026-02-16
-**Goal:** Transform the InsightAI POC into a production-grade internal product with Simpleem-style Artificial Emotional Intelligence (55% non-verbal / 38% para-verbal / 7% verbal signal weighting), robust URL import, real audio analysis, streaming transcription with speaker diarization, live meeting integration, and engagement intelligence.
+**Goal:** Transform the LensAI POC into a production-grade internal product with Simpleem-style Artificial Emotional Intelligence (55% non-verbal / 38% para-verbal / 7% verbal signal weighting), robust URL import, real audio analysis, streaming transcription with speaker diarization, live meeting integration, and engagement intelligence.
 
 ---
 
@@ -375,7 +375,7 @@ Use Recall.ai (or similar meeting bot service) to join Zoom/Teams/Meet calls and
 
 ### API Flow
 ```
-POST /api/meetings/join  {"meeting_url": "https://zoom.us/j/123...", "bot_name": "InsightAI"}
+POST /api/meetings/join  {"meeting_url": "https://zoom.us/j/123...", "bot_name": "LensAI"}
   → Backend calls Recall.ai API to create bot
   → Returns {meeting_id, status: "joining"}
 

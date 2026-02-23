@@ -1,8 +1,8 @@
-# InsightAI v2 Implementation Plan
+# LensAI v2 Implementation Plan
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Upgrade InsightAI POC to production-grade conversation intelligence with Simpleem-style 55/38/7 signal weighting, robust URL import, real audio analysis, speaker diarization, engagement alerts, live meeting integration, and export capabilities.
+**Goal:** Upgrade LensAI POC to production-grade conversation intelligence with Simpleem-style 55/38/7 signal weighting, robust URL import, real audio analysis, speaker diarization, engagement alerts, live meeting integration, and export capabilities.
 
 **Architecture:** Three independent signal pipelines (Visual 55%, Audio 38%, Text 7%) emit normalized events to a central SignalBus. The EngagementEngine subscribes to the bus and computes holistic per-participant engagement scores with configurable threshold alerts.
 
@@ -1040,7 +1040,7 @@ Reorganize existing analysis code into the new pipelines/ structure. This is a r
 **Step 1: Create pipelines/__init__.py**
 
 ```python
-"""Signal processing pipelines for InsightAI v2.
+"""Signal processing pipelines for LensAI v2.
 
 - visual.py: Frame analysis via GPT-4o Vision (55% weight)
 - audio.py: Audio feature extraction via librosa (38% weight)

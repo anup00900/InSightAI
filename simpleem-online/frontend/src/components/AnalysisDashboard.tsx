@@ -568,8 +568,8 @@ export default function AnalysisDashboard({ results, loading, videoId, video, mo
       const a = document.createElement('a');
       a.href = url;
       a.download = format === 'pdf'
-        ? `insightai_report_${videoId.slice(0, 8)}.pdf`
-        : `insightai_data_${videoId.slice(0, 8)}.zip`;
+        ? `lensai_report_${videoId.slice(0, 8)}.pdf`
+        : `lensai_data_${videoId.slice(0, 8)}.zip`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);

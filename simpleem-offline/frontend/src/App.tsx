@@ -269,7 +269,7 @@ function App() {
             </div>
             <div>
               <h1 className="text-lg font-bold text-text-primary tracking-tight">
-                InsightAI
+                LensAI
               </h1>
               <p className="text-[11px] text-text-muted">Offline Meeting Intelligence</p>
             </div>

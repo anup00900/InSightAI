@@ -135,7 +135,7 @@ class MeetingAnalytics(BaseModel):
 
 class JoinMeetingRequest(BaseModel):
     meeting_url: str
-    bot_name: str = "InsightAI Bot"
+    bot_name: str = "LensAI Bot"
 
 
 class RenameParticipantRequest(BaseModel):

@@ -74,7 +74,7 @@ WHISPER_MODEL=whisper-1
 set -e
 cd "$(dirname "$0")"
 
-echo "=== InsightAI Offline — Starting ==="
+echo "=== LensAI Offline — Starting ==="
 
 # Backend
 cd backend
@@ -1063,7 +1063,7 @@ export default {
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
-    <title>InsightAI Offline — Meeting Analysis</title>
+    <title>LensAI Offline — Meeting Analysis</title>
   </head>
   <body>
     <div id="root"></div>
@@ -1333,7 +1333,7 @@ Flow:
 4. Analysis completes → step 4 shows AnalysisDashboard
 5. From library, clicking a "complete" video goes straight to dashboard view
 
-**Step 2: Create TopBar.tsx** — App header with gradient logo, "InsightAI Offline" title, back button. Glassmorphism navbar with backdrop blur.
+**Step 2: Create TopBar.tsx** — App header with gradient logo, "LensAI Offline" title, back button. Glassmorphism navbar with backdrop blur.
 
 **Step 3: Create Sidebar.tsx** — Optional left nav (if needed, otherwise TopBar is sufficient).
 

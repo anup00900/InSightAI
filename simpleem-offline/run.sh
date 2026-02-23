@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 cd "$(dirname "$0")"
-echo "=== InsightAI Offline — Starting ==="
+echo "=== LensAI Offline — Starting ==="
 pip install -r backend/requirements.txt -q 2>/dev/null
 python -m uvicorn backend.main:app --host 0.0.0.0 --port 9000 --reload &
 BACKEND_PID=$!

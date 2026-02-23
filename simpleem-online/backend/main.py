@@ -37,7 +37,7 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="InsightAI - Conversation Intelligence", lifespan=lifespan)
+app = FastAPI(title="LensAI - Conversation Intelligence", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -633,7 +633,7 @@ async def export_pdf(video_id: str):
         return Response(
             content=pdf_bytes,
             media_type="application/pdf",
-            headers={"Content-Disposition": f"attachment; filename=insightai_report_{video_id[:8]}.pdf"},
+            headers={"Content-Disposition": f"attachment; filename=lensai_report_{video_id[:8]}.pdf"},
         )
     except ValueError as e:
         raise HTTPException(404, str(e))
@@ -649,7 +649,7 @@ async def export_csv(video_id: str):
         return Response(
             content=zip_bytes,
             media_type="application/zip",
-            headers={"Content-Disposition": f"attachment; filename=insightai_data_{video_id[:8]}.zip"},
+            headers={"Content-Disposition": f"attachment; filename=lensai_data_{video_id[:8]}.zip"},
         )
     except ValueError as e:
         raise HTTPException(404, str(e))

@@ -2,7 +2,7 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Move the Record button to the home page so users can capture InsightAI dashboard demos with full audio.
+**Goal:** Move the Record button to the home page so users can capture LensAI dashboard demos with full audio.
 
 **Architecture:** Extract the existing `useScreenRecorder` hook from `AnalysisDashboard.tsx` into a shared hook file, then add a Record UI section to `VideoUpload.tsx` on the landing page. The dashboard keeps its own Record button using the same hook.
 
@@ -188,7 +188,7 @@ import { useScreenRecorder } from '../hooks/useScreenRecorder';
 
 Inside the component function, add:
 ```typescript
-const { isRecording, recordingTime, startRecording, stopRecording, hasAudio } = useScreenRecorder('InsightAI_Recording');
+const { isRecording, recordingTime, startRecording, stopRecording, hasAudio } = useScreenRecorder('LensAI_Recording');
 ```
 
 **Step 2: Add Record UI section**
@@ -224,7 +224,7 @@ After the "Join Live Meeting" section (after the `{activeBotId && ...}` block, b
 </div>
 {isRecording && (
   <p className="text-xs text-text-muted text-center">
-    Recording your screen with audio — share the InsightAI browser tab for best results
+    Recording your screen with audio — share the LensAI browser tab for best results
   </p>
 )}
 ```
@@ -260,7 +260,7 @@ cd "/Users/anup.roy/Downloads/Simpleem Work/simpleem-online/frontend" && npm run
 1. Open `http://localhost:5173`
 2. Confirm "Record" button appears below the "Join Meeting" section
 3. Click Record → browser should prompt to share a tab
-4. Share the InsightAI tab (check "Share audio" checkbox in Chrome)
+4. Share the LensAI tab (check "Share audio" checkbox in Chrome)
 5. Confirm timer is counting up
 6. Click "Stop Recording" → `.webm` file should download
 7. Open the downloaded file — confirm it has video AND audio

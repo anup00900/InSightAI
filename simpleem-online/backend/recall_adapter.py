@@ -61,7 +61,7 @@ class RecallAiAdapter:
     def is_configured(self) -> bool:
         return bool(self.api_key)
 
-    async def join_meeting(self, meeting_url: str, bot_name: str = "InsightAI Bot") -> MeetingBot:
+    async def join_meeting(self, meeting_url: str, bot_name: str = "LensAI Bot") -> MeetingBot:
         """Create a bot to join the meeting.
 
         Args:
